@@ -146,6 +146,17 @@ contract WebAuthnValidator is ERC7579HybridValidatorBase {
                                  CONFIG
     //////////////////////////////////////////////////////////////*/
 
+    modifier moduleIsInitialized() {
+        require(isInitialized(msg.sender), NotInitialized(msg.sender));
+        _;
+    }
+
+    modifier moduleIsNotInitialized() {
+        require(!isInitialized(msg.sender), ModuleAlreadyInitialized(msg.sender));
+        _;
+    }
+
+
     /// @notice Initializes the module with WebAuthn credentials
     /// @dev Installs the validator with threshold and initial set of credentials
     /// @param data Encoded as: abi.encode(threshold, pubKeysX, pubKeysY, requireUVs)

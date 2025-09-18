@@ -1,3 +1,5 @@
+[profile]
+dev = { libs = ["node_modules", "lib"] }
 [profile.default]
 solc = "0.8.28"
 evm_version = "cancun"
