@@ -2,10 +2,11 @@
 pragma solidity ^0.8.23;
 
 import { BaseIntegrationTest, ModuleKitHelpers } from "test/BaseIntegration.t.sol";
-import { ContangoOwnableValidator } from "src/ContangoOwnableValidator/ContangoOwnableValidator.sol";
 import { signHash, signUserOpHash } from "test/utils/Signature.sol";
 import { MODULE_TYPE_VALIDATOR } from "modulekit/accounts/common/interfaces/IERC7579Module.sol";
 import { UserOpData } from "modulekit/ModuleKit.sol";
+import { ContangoOwnableTestValidator as ContangoOwnableValidator } from
+    "test/ContangoOwnableValidator/ContangoOwnableValidatorTest.sol";
 
 contract ContangoOwnableValidatorIntegrationTest is BaseIntegrationTest {
     using ModuleKitHelpers for *;
@@ -97,7 +98,9 @@ contract ContangoOwnableValidatorIntegrationTest is BaseIntegrationTest {
         instance.getExecOps({
             target: address(validator),
             value: 0,
-            callData: abi.encodeWithSelector(ContangoOwnableValidator.setThreshold.selector, newThreshold),
+            callData: abi.encodeWithSelector(
+                ContangoOwnableValidator.setThreshold.selector, newThreshold
+            ),
             txValidator: address(instance.defaultValidator)
         }).execUserOps();
 
@@ -113,7 +116,9 @@ contract ContangoOwnableValidatorIntegrationTest is BaseIntegrationTest {
         instance.getExecOps({
             target: address(validator),
             value: 0,
-            callData: abi.encodeWithSelector(ContangoOwnableValidator.setThreshold.selector, newThreshold),
+            callData: abi.encodeWithSelector(
+                ContangoOwnableValidator.setThreshold.selector, newThreshold
+            ),
             txValidator: address(instance.defaultValidator)
         }).execUserOps();
     }
@@ -146,9 +151,7 @@ contract ContangoOwnableValidatorIntegrationTest is BaseIntegrationTest {
         instance.getExecOps({
             target: address(validator),
             value: 0,
-            callData: abi.encodeWithSelector(
-                ContangoOwnableValidator.removeOwner.selector, _owners[1]
-            ),
+            callData: abi.encodeWithSelector(ContangoOwnableValidator.removeOwner.selector, _owners[1]),
             txValidator: address(instance.defaultValidator)
         }).execUserOps();
 

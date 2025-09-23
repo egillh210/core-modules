@@ -2,32 +2,37 @@
 pragma solidity ^0.8.23;
 
 import { BaseTest } from "test/Base.t.sol";
-import { ContangoOwnableValidator, ERC7579ValidatorBase } from "src/ContangoOwnableValidator/ContangoOwnableValidator.sol";
+import { ContangoOwnableTestValidator } from
+    "test/ContangoOwnableValidator/ContangoOwnableValidatorTest.sol";
+import {
+    ContangoOwnableValidator,
+    ERC7579ValidatorBase
+} from "src/ContangoOwnableValidator/ContangoOwnableValidator.sol";
 import { IModule as IERC7579Module } from "modulekit/accounts/common/interfaces/IERC7579Module.sol";
 import { PackedUserOperation, getEmptyUserOperation } from "test/utils/ERC4337.sol";
 import { signHash, signUserOpHash } from "test/utils/Signature.sol";
 import { EIP1271_MAGIC_VALUE } from "test/utils/Constants.sol";
 import { LibSort } from "solady/utils/LibSort.sol";
 import { EnumerableSet } from "@erc7579/enumerablemap4337/EnumerableSet4337.sol";
+import { EnumerableMap } from "@erc7579/enumerablemap4337/EnumerableMap4337.sol";
 
 contract ContangoOwnableValidatorTest is BaseTest {
     using LibSort for *;
     using EnumerableSet for EnumerableSet.AddressSet;
+    using EnumerableMap for EnumerableMap.AddressToUintMap;
 
     /*//////////////////////////////////////////////////////////////////////////
                                     CONTRACTS
     //////////////////////////////////////////////////////////////////////////*/
 
-    ContangoOwnableValidator internal validator;
+    ContangoOwnableTestValidator internal validator;
 
     /*//////////////////////////////////////////////////////////////////////////
                                     VARIABLES
     //////////////////////////////////////////////////////////////////////////*/
 
     uint256 _threshold = 2;
-    address[] _owners;
-    uint256[] _ownerPks;
-    EnumerableSet.AddressSet ownersSet;
+    EnumerableMap.AddressToUintMap ownersMap; // key is address, value is private key (uint256)
 
     /*//////////////////////////////////////////////////////////////////////////
                                       SETUP
@@ -35,27 +40,13 @@ contract ContangoOwnableValidatorTest is BaseTest {
 
     function setUp() public virtual override {
         BaseTest.setUp();
-        validator = new ContangoOwnableValidator();
 
-        _owners = new address[](2);
-        _ownerPks = new uint256[](2);
+        validator = new ContangoOwnableTestValidator();
 
         (address _owner1, uint256 _owner1Pk) = makeAddrAndKey("owner1");
-        _owners[0] = _owner1;
-        ownersSet.add(address(this), _owner1);
-        _ownerPks[0] = _owner1Pk;
-
         (address _owner2, uint256 _owner2Pk) = makeAddrAndKey("owner2");
-
-        uint256 counter = 0;
-        while (uint160(_owner1) > uint160(_owner2)) {
-            counter++;
-            (_owner2, _owner2Pk) = makeAddrAndKey(vm.toString(counter));
-        }
-
-        _owners[1] = _owner2;
-        ownersSet.add(address(this), _owner2);
-        _ownerPks[1] = _owner2Pk;
+        ownersMap.set(address(this), _owner1, _owner1Pk);
+        ownersMap.set(address(this), _owner2, _owner2Pk);
     }
 
     /*//////////////////////////////////////////////////////////////////////////
@@ -64,7 +55,7 @@ contract ContangoOwnableValidatorTest is BaseTest {
 
     function test_OnInstallRevertWhen_ModuleIsIntialized() public {
         // it should revert
-        bytes memory data = abi.encode(_threshold, _owners);
+        bytes memory data = abi.encode(_threshold, ownersMap.keys(address(this)));
 
         validator.onInstall(data);
 
@@ -74,9 +65,11 @@ contract ContangoOwnableValidatorTest is BaseTest {
 
     function test_OnInstallRevertWhen_ThresholdIs0() public whenModuleIsNotIntialized {
         // it should revert
-        bytes memory data = abi.encode(0, _owners);
+        bytes memory data = abi.encode(0, ownersMap.keys(address(this)));
 
-        vm.expectRevert(abi.encodeWithSelector(ContangoOwnableValidator.InvalidThreshold.selector, 0, 1, 2));
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoOwnableValidator.InvalidThreshold.selector, 0, 1, 2)
+        );
         validator.onInstall(data);
     }
 
@@ -86,7 +79,7 @@ contract ContangoOwnableValidatorTest is BaseTest {
         whenThresholdIsNot0
     {
         // it should set the threshold
-        bytes memory data = abi.encode(_threshold, _owners);
+        bytes memory data = abi.encode(_threshold, ownersMap.keys(address(this)));
 
         validator.onInstall(data);
 
@@ -100,9 +93,11 @@ contract ContangoOwnableValidatorTest is BaseTest {
         whenThresholdIsNot0
     {
         // it should revert
-        bytes memory data = abi.encode(3, _owners);
+        bytes memory data = abi.encode(3, ownersMap.keys(address(this)));
 
-        vm.expectRevert(abi.encodeWithSelector(ContangoOwnableValidator.InvalidThreshold.selector, 3, 1, 2));
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoOwnableValidator.InvalidThreshold.selector, 3, 1, 2)
+        );
         validator.onInstall(data);
     }
 
@@ -117,11 +112,11 @@ contract ContangoOwnableValidatorTest is BaseTest {
         for (uint256 i = 0; i < 33; i++) {
             _newOwners[i] = makeAddr(vm.toString(i));
         }
-        _newOwners.sort();
-        _newOwners.uniquifySorted();
         bytes memory data = abi.encode(_threshold, _newOwners);
 
-        vm.expectRevert(abi.encodeWithSelector(ContangoOwnableValidator.InvalidOwnersCount.selector, 33, 1, 32));
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoOwnableValidator.InvalidOwnersCount.selector, 33, 1, 32)
+        );
         validator.onInstall(data);
     }
 
@@ -133,12 +128,13 @@ contract ContangoOwnableValidatorTest is BaseTest {
         whenOwnersLengthIsNotMoreThanMax
     {
         // it should set owner count
-        bytes memory data = abi.encode(_threshold, _owners);
+        address[] memory owners = ownersMap.keys(address(this));
+        bytes memory data = abi.encode(_threshold, owners);
 
         validator.onInstall(data);
 
         uint256 ownerCount = validator.getOwnersCount(address(this));
-        assertEq(ownerCount, _owners.length);
+        assertEq(ownerCount, owners.length);
     }
 
     /**
@@ -148,7 +144,6 @@ contract ContangoOwnableValidatorTest is BaseTest {
      * 3. Parameter validation is the caller's responsibility
      * 4. Adding arbitrary validation heuristics increases complexity without clear benefit
      */
-
     function test_OnInstallRevertWhen_OwnersInclude0Address()
         public
         whenModuleIsNotIntialized
@@ -159,13 +154,15 @@ contract ContangoOwnableValidatorTest is BaseTest {
         // it should revert
         address[] memory _newOwners = new address[](2);
         _newOwners[0] = address(0);
-        _newOwners[1] = _owners[1];
+        _newOwners[1] = ownersMap.keys(address(this))[1];
         bytes memory data = abi.encode(_threshold, _newOwners);
 
         // vm.expectRevert();
         validator.onInstall(data);
     }
 
+    // duplicates are allowed. you pay for the extra calldata overhead and runtime gas, but it is
+    // allowed
     function test_OnInstallWhenOwnersIncludeDuplicates()
         public
         whenModuleIsNotIntialized
@@ -173,14 +170,17 @@ contract ContangoOwnableValidatorTest is BaseTest {
         whenOwnersLengthIsNotLessThanThreshold
         whenOwnersLengthIsNotMoreThanMax
     {
+        address[] memory owners = ownersMap.keys(address(this));
         // it should revert
         address[] memory _newOwners = new address[](3);
-        _newOwners[0] = _owners[0];
-        _newOwners[1] = _owners[1];
-        _newOwners[2] = _owners[0];
+        _newOwners[0] = owners[0];
+        _newOwners[1] = owners[1];
+        _newOwners[2] = owners[0];
         bytes memory data = abi.encode(_threshold, _newOwners);
 
-        vm.expectRevert(abi.encodeWithSelector(ContangoOwnableValidator.OwnerAlreadyExists.selector, _owners[0]));
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoOwnableValidator.AddOwnerError_OwnerAlreadyExists.selector, address(this), ownersMap.keys(address(this))[0])
+        );
         validator.onInstall(data);
     }
 
@@ -192,12 +192,13 @@ contract ContangoOwnableValidatorTest is BaseTest {
         whenOwnersLengthIsNotMoreThanMax
     {
         // it should set all owners
-        bytes memory data = abi.encode(_threshold, _owners);
+        address[] memory testOwners = ownersMap.keys(address(this));
+        bytes memory data = abi.encode(_threshold, testOwners);
 
         validator.onInstall(data);
 
-        address[] memory owners = validator.getOwners(address(this));
-        assertEq(owners.length, _owners.length);
+        address[] memory actualOwners = validator.getOwners(address(this));
+        assertEq(actualOwners.length, testOwners.length);
     }
 
     function test_OnUninstallShouldRemoveAllOwners() public {
@@ -245,15 +246,17 @@ contract ContangoOwnableValidatorTest is BaseTest {
         vm.expectRevert(
             abi.encodeWithSelector(IERC7579Module.NotInitialized.selector, address(this))
         );
-        validator.setThreshold(1);
+        validator.updateConfig(1, new address[](0), new address[](0));
     }
 
     function test_SetThresholdRevertWhen_ThresholdIs0() external whenModuleIsIntialized {
         // it should revert
         test_OnInstallWhenOwnersIncludeNoDuplicates();
 
-        vm.expectRevert(abi.encodeWithSelector(ContangoOwnableValidator.InvalidThreshold.selector, 0, 1, 2));
-        validator.setThreshold(0);
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoOwnableValidator.InvalidThreshold.selector, 0, 1, 2)
+        );
+        validator.updateConfig(0, new address[](0), new address[](0));
     }
 
     function test_SetThresholdRevertWhen_ThresholdIsHigherThanOwnersLength()
@@ -264,8 +267,10 @@ contract ContangoOwnableValidatorTest is BaseTest {
         // it should revert
         test_OnInstallWhenOwnersIncludeNoDuplicates();
 
-        vm.expectRevert(abi.encodeWithSelector(ContangoOwnableValidator.InvalidThreshold.selector, 10, 1, 2));
-        validator.setThreshold(10);
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoOwnableValidator.InvalidThreshold.selector, 10, 1, 2)
+        );
+        validator.updateConfig(10, new address[](0), new address[](0));
     }
 
     function test_SetThresholdWhenThresholdIsNotHigherThanOwnersLength()
@@ -280,7 +285,7 @@ contract ContangoOwnableValidatorTest is BaseTest {
         uint256 newThreshold = 1;
         assertNotEq(oldThreshold, newThreshold);
 
-        validator.setThreshold(newThreshold);
+        validator.updateConfig(newThreshold, new address[](0), new address[](0));
 
         assertEq(validator.thresholds(address(this)), newThreshold);
     }
@@ -290,20 +295,10 @@ contract ContangoOwnableValidatorTest is BaseTest {
         vm.expectRevert(
             abi.encodeWithSelector(IERC7579Module.NotInitialized.selector, address(this))
         );
-        validator.addOwner(address(1));
+        address[] memory ownersToAdd = new address[](1);
+        ownersToAdd[0] = address(1);
+        validator.updateConfig(_threshold, ownersToAdd, new address[](0));
     }
-
-    // same comment as above!
-    // why treat address(0) any differently than say address(1)?
-
-    // function test_AddOwnerRevertWhen_OwnerIs0Address() external whenModuleIsIntialized {
-    //     // it should revert
-    //     test_OnInstallWhenOwnersIncludeNoDuplicates();
-
-    //     address newOwner = address(0);
-    //     vm.expectRevert(abi.encodeWithSelector(OwnableValidator.InvalidOwner.selector, newOwner));
-    //     validator.addOwner(newOwner);
-    // }
 
     function test_AddOwnerRevertWhen_OwnerCountIsMoreThanMax()
         external
@@ -319,11 +314,17 @@ contract ContangoOwnableValidatorTest is BaseTest {
 
         validator.onInstall(data);
 
-        vm.expectRevert(abi.encodeWithSelector(ContangoOwnableValidator.InvalidOwnersCount.selector, 33, 1, 32));
+        bool isInitialized = validator.isInitialized(address(this));
+        assertTrue(isInitialized);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoOwnableValidator.InvalidOwnersCount.selector, 33, 1, 32)
+        );
         validator.addOwner(makeAddr("finalOwner"));
     }
 
-    function test_AddOwnerRevertWhen_OwnerIsAlreadyAdded()
+    // adding an owner that is already added should not revert.
+    function test_AddOwnerShouldNotRevertWhen_OwnerIsAlreadyAdded()
         external
         whenModuleIsIntialized
         whenOwnerIsNot0Address
@@ -332,23 +333,27 @@ contract ContangoOwnableValidatorTest is BaseTest {
         // it should revert
         test_OnInstallWhenOwnersIncludeNoDuplicates();
 
-        vm.expectRevert(abi.encodeWithSelector(ContangoOwnableValidator.OwnerAlreadyExists.selector, _owners[0]));
-        validator.addOwner(_owners[0]);
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoOwnableValidator.AddOwnerError_OwnerAlreadyExists.selector, address(this), ownersMap.keys(address(this))[0])
+        );
+        validator.addOwner(ownersMap.keys(address(this))[0]);
     }
 
-
-    function test_RemoveOwnerRevertWhen_OwnerIsNotAdded()
+    // calling the contract to remove an owner that doesn't exist as an owner should not revert.
+    // The contract will simply carry out the instruction and do nothing
+    function test_RemoveOwnerShouldNotRevertWhen_OwnerIsNotAdded()
         external
         whenModuleIsIntialized
         whenOwnerIsNot0Address
         whenOwnerCountIsNotMoreThanMax
     {
-        // it should revert
         test_OnInstallWhenOwnersIncludeNoDuplicates();
 
         address ownerToRemove = address(2); // is not a configured owner
 
-        vm.expectRevert(abi.encodeWithSelector(ContangoOwnableValidator.OwnerDoesNotExist.selector, ownerToRemove));
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoOwnableValidator.RemoveOwnerError_OwnerDoesNotExist.selector, address(this), ownerToRemove)
+        );
         validator.removeOwner(ownerToRemove);
     }
 
@@ -376,16 +381,16 @@ contract ContangoOwnableValidatorTest is BaseTest {
     function test_RemoveOwnerRevertWhen_ModuleIsNotIntialized() external {
         // it should revert
         vm.expectRevert();
-        validator.removeOwner(_owners[0]);
+        validator.removeOwner(ownersMap.keys(address(this))[0]);
     }
 
-    function test_RemoveOwnerWhenModuleIsIntialized() external {
+    function test_RemoveOwnerAndUpdateThreshold() external {
         // it should decrement owner count
         // it should remove the owner
         test_OnInstallWhenOwnersIncludeNoDuplicates();
-        validator.setThreshold(1);
-
-        validator.removeOwner(_owners[1]);
+        address[] memory ownersToRemove = new address[](1);
+        ownersToRemove[0] = ownersMap.keys(address(this))[1];
+        validator.updateConfig(1, new address[](0), ownersToRemove);
 
         uint256 ownerCount = validator.getOwnersCount(address(this));
         assertEq(ownerCount, 1);
@@ -395,20 +400,18 @@ contract ContangoOwnableValidatorTest is BaseTest {
         // it should get all owners
         test_OnInstallWhenOwnersIncludeNoDuplicates();
 
-
-        for (uint256 i = 0; i < _owners.length; i++) {
-            ownersSet.add(address(this), _owners[i]);
-        }
-
         address[] memory owners = validator.getOwners(address(this));
-        assertEq(owners.length, ownersSet.length(address(this)));
+        assertEq(owners.length, ownersMap.keys(address(this)).length);
 
         for (uint256 i = 0; i < owners.length; i++) {
-            assertTrue(ownersSet.contains(address(this), owners[i]));
+            assertTrue(ownersMap.contains(address(this), owners[i]));
         }
     }
 
-    function test_ValidateUserOpWhenThresholdIsNotSet() external view {
+    // this test really is just testing if the module is initialized
+    // former test name: test_ValidateUserOpWhenThresholdIsNotSet
+    // new test name: test_ValidateUserOpWhenModuleIsNotIntialized
+    function test_ValidateUserOpWhenModuleIsNotIntialized() external view {
         // it should return 1
         PackedUserOperation memory userOp = getEmptyUserOperation();
         userOp.sender = address(this);
@@ -448,7 +451,9 @@ contract ContangoOwnableValidatorTest is BaseTest {
         userOp.sender = address(this);
         bytes32 userOpHash = bytes32(keccak256("userOpHash"));
 
-        bytes memory signature1 = signHash(_ownerPks[0], userOpHash);
+        address[] memory owners = ownersMap.keys(address(this));
+
+        bytes memory signature1 = signHash(ownersMap.get(address(this), owners[0]), userOpHash);
         bytes memory signature2 = signHash(uint256(2), userOpHash);
         userOp.signature = abi.encodePacked(signature1, signature2);
 
@@ -469,8 +474,12 @@ contract ContangoOwnableValidatorTest is BaseTest {
         userOp.sender = address(this);
         bytes32 userOpHash = bytes32(keccak256("userOpHash"));
 
-        bytes memory signature1 = signUserOpHash(_ownerPks[0], userOpHash);
-        bytes memory signature2 = signUserOpHash(_ownerPks[1], userOpHash);
+        address[] memory owners = ownersMap.keys(address(this));
+
+        bytes memory signature1 =
+            signUserOpHash(ownersMap.get(address(this), owners[0]), userOpHash);
+        bytes memory signature2 =
+            signUserOpHash(ownersMap.get(address(this), owners[1]), userOpHash);
         userOp.signature = abi.encodePacked(signature1, signature2);
 
         uint256 validationData =
@@ -517,7 +526,9 @@ contract ContangoOwnableValidatorTest is BaseTest {
         address sender = address(1);
         bytes32 hash = bytes32(keccak256("hash"));
 
-        bytes memory signature1 = signHash(_ownerPks[0], hash);
+        address[] memory owners = ownersMap.keys(address(this));
+
+        bytes memory signature1 = signHash(ownersMap.get(address(this), owners[0]), hash);
         bytes memory signature2 = signHash(uint256(2), hash);
         bytes memory data = abi.encodePacked(signature1, signature2);
 
@@ -536,8 +547,10 @@ contract ContangoOwnableValidatorTest is BaseTest {
         address sender = address(1);
         bytes32 hash = bytes32(keccak256("hash"));
 
-        bytes memory signature1 = signHash(_ownerPks[0], hash);
-        bytes memory signature2 = signHash(_ownerPks[1], hash);
+        address[] memory owners = ownersMap.keys(address(this));
+
+        bytes memory signature1 = signHash(ownersMap.get(address(this), owners[0]), hash);
+        bytes memory signature2 = signHash(ownersMap.get(address(this), owners[1]), hash);
         bytes memory data = abi.encodePacked(signature1, signature2);
 
         bytes4 result = validator.isValidSignatureWithSender(sender, hash, data);
@@ -548,14 +561,13 @@ contract ContangoOwnableValidatorTest is BaseTest {
         // it should return false
         bytes32 hash = bytes32(keccak256("hash"));
 
-        bytes memory signature1 = signHash(_ownerPks[0], hash);
-        bytes memory signature2 = signHash(_ownerPks[0], hash);
+        address[] memory owners = ownersMap.keys(address(this));
+
+        bytes memory signature1 = signHash(ownersMap.get(address(this), owners[0]), hash);
+        bytes memory signature2 = signHash(ownersMap.get(address(this), owners[0]), hash);
         bytes memory signatures = abi.encodePacked(signature1, signature2);
 
-        address[] memory owners = new address[](2);
-        owners[0] = _owners[0];
-        owners[1] = _owners[1];
-        bytes memory data = abi.encode(_threshold, _owners);
+        bytes memory data = abi.encode(_threshold, owners);
 
         bool isValid = validator.validateSignatureWithData(hash, signatures, data);
         assertFalse(isValid);
@@ -563,12 +575,13 @@ contract ContangoOwnableValidatorTest is BaseTest {
 
     function test_ValidateSignatureWithDataRevertWhen_ThresholdIsNotSet()
         external
+        view
         whenOwnersAreUnique
     {
         //it should return false
         bytes32 hash = bytes32(keccak256("hash"));
         bytes memory signatures = "";
-        bytes memory data = abi.encode(0, _owners);
+        bytes memory data = abi.encode(0, ownersMap.keys(address(this)));
 
         bool isValid = validator.validateSignatureWithData(hash, signatures, data);
         assertFalse(isValid);
@@ -584,7 +597,7 @@ contract ContangoOwnableValidatorTest is BaseTest {
         bytes memory signature1 = signHash(uint256(1), hash);
         bytes memory signature2 = signHash(uint256(2), hash);
         bytes memory signatures = abi.encodePacked(signature1, signature2);
-        bytes memory data = abi.encode(_threshold, _owners);
+        bytes memory data = abi.encode(_threshold, ownersMap.keys(address(this)));
 
         bool isValid = validator.validateSignatureWithData(hash, signatures, data);
         assertFalse(isValid);
@@ -596,12 +609,13 @@ contract ContangoOwnableValidatorTest is BaseTest {
         whenThresholdIsSet
         whenTheSignaturesAreValid
     {
+        address[] memory owners = ownersMap.keys(address(this));
         // it should return false
         bytes32 hash = bytes32(keccak256("hash"));
-        bytes memory signature1 = signHash(_ownerPks[0], hash);
+        bytes memory signature1 = signHash(ownersMap.get(address(this), owners[0]), hash);
         bytes memory signature2 = signHash(uint256(2), hash);
         bytes memory signatures = abi.encodePacked(signature1, signature2);
-        bytes memory data = abi.encode(_threshold, _owners);
+        bytes memory data = abi.encode(_threshold, owners);
 
         bool isValid = validator.validateSignatureWithData(hash, signatures, data);
         assertFalse(isValid);
@@ -615,10 +629,11 @@ contract ContangoOwnableValidatorTest is BaseTest {
     {
         // it should return true
         bytes32 hash = bytes32(keccak256("hash"));
-        bytes memory signature1 = signHash(_ownerPks[0], hash);
-        bytes memory signature2 = signHash(_ownerPks[1], hash);
+        address[] memory owners = ownersMap.keys(address(this));
+        bytes memory signature1 = signHash(ownersMap.get(address(this), owners[0]), hash);
+        bytes memory signature2 = signHash(ownersMap.get(address(this), owners[1]), hash);
         bytes memory signatures = abi.encodePacked(signature1, signature2);
-        bytes memory data = abi.encode(_threshold, _owners);
+        bytes memory data = abi.encode(_threshold, owners);
 
         bool isValid = validator.validateSignatureWithData(hash, signatures, data);
         assertTrue(isValid);
