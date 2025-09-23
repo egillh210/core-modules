@@ -11,7 +11,6 @@ import { MODULE_TYPE_STATELESS_VALIDATOR as TYPE_STATELESS_VALIDATOR } from
     "modulekit/module-bases/utils/ERC7579Constants.sol";
 
 contract ContangoOwnableValidator is ERC7579ValidatorBase {
-
     using LibSort for *;
     using EnumerableSet for EnumerableSet.AddressSet;
 
@@ -27,8 +26,6 @@ contract ContangoOwnableValidator is ERC7579ValidatorBase {
 
     error InvalidThreshold(uint256 threshold, uint256 minThreshold, uint256 maxThreshold);
     error InvalidOwnersCount(uint256 ownersCount, uint256 minOwnersCount, uint256 maxOwnersCount);
-    error OwnerAlreadyExists(address owner);
-    error OwnerDoesNotExist(address owner);
 
     EnumerableSet.AddressSet owners;
     mapping(address account => uint256) public thresholds;
@@ -43,40 +40,24 @@ contract ContangoOwnableValidator is ERC7579ValidatorBase {
         _;
     }
 
+    // Default to the min and max value constants for the invariants
+    modifier checkInvariants() {
+        _;
+        _checkInvariants(msg.sender, MIN_OWNERS, MAX_OWNERS);
+    }
+
     /*//////////////////////////////////////////////////////////////////////////
                                      INTERNAL
     //////////////////////////////////////////////////////////////////////////*/
 
-    function _setThreshold(address account, uint256 _threshold) internal {
-        thresholds[account] = _threshold;
-        emit ThresholdSet(account, _threshold);
-    }
-
-    /**
-     * @dev EnumerableSet.add returns false if the item already exists
-     */
-    function _addOwner(address account, address owner) internal {
-        if (!owners.add(account, owner)) revert OwnerAlreadyExists(owner);
-        emit OwnerAdded(account, owner);
-    }
-
-    /**
-     * @dev EnumerableSet.remove returns false if the item does not exist
-     */
-    function _removeOwner(address account, address owner) internal {
-        if (!owners.remove(account, owner)) revert OwnerDoesNotExist(owner);
-        emit OwnerRemoved(account, owner);
-    }
-
-    function _addOwners(address account, address[] memory newOwners) internal {
-        for (uint256 i = 0; i < newOwners.length; i++) _addOwner(account, newOwners[i]);
-    }
-
-    function _removeOwners(address account, address[] memory ownersToRemove) internal {
-        for (uint256 i = 0; i < ownersToRemove.length; i++) _removeOwner(account, ownersToRemove[i]);
-    }
-
-    function _checkInvariants(address account, uint256 minOwnersCount, uint256 maxOwnersCount) internal view {
+    function _checkInvariants(
+        address account,
+        uint256 minOwnersCount,
+        uint256 maxOwnersCount
+    )
+        internal
+        view
+    {
         uint256 ownersCount = owners.length(account);
         uint256 threshold = thresholds[account];
         require(
@@ -89,9 +70,40 @@ contract ContangoOwnableValidator is ERC7579ValidatorBase {
         );
     }
 
-    // Default to the min and max value constants for the invariants
-    function _checkInvariants(address account) internal view {
-        _checkInvariants(account, MIN_OWNERS, MAX_OWNERS);
+    function _setThreshold(address account, uint256 _threshold) internal {
+        thresholds[account] = _threshold;
+        emit ThresholdSet(account, _threshold);
+    }
+
+    function _addOwners(address account, address[] memory newOwners) internal {
+        for (uint256 i = 0; i < newOwners.length; i++) {
+            // EnumerableSet.add returns false if the item already exists
+            if (owners.add(account, newOwners[i])) emit OwnerAdded(account, newOwners[i]);
+        }
+    }
+
+    function _removeOwners(address account, address[] memory ownersToRemove) internal {
+        for (uint256 i = 0; i < ownersToRemove.length; i++) {
+            // EnumerableSet.remove returns false if the item does not exist
+            if (owners.remove(account, ownersToRemove[i])) {
+                emit OwnerRemoved(account, ownersToRemove[i]);
+            }
+        }
+    }
+
+    function _updateConfig(
+        uint256 newThreshold,
+        address[] memory ownersToAdd,
+        address[] memory ownersToRemove
+    )
+        internal
+        checkInvariants
+        moduleIsInitialized
+    {
+        address account = msg.sender;
+        _removeOwners(account, ownersToRemove);
+        _addOwners(account, ownersToAdd);
+        _setThreshold(account, newThreshold);
     }
 
     /*//////////////////////////////////////////////////////////////////////////
@@ -105,52 +117,27 @@ contract ContangoOwnableValidator is ERC7579ValidatorBase {
      * @param ownersToAdd address[] array of owners to add.
      * @param ownersToRemove address[] array of owners to remove.
      */
-    function updateConfig(uint256 newThreshold, address[] calldata ownersToAdd, address[] calldata ownersToRemove) public moduleIsInitialized {
-        address account = msg.sender;
-        _removeOwners(account, ownersToRemove);
-        _addOwners(account, ownersToAdd);
-        _setThreshold(account, newThreshold);
-        _checkInvariants(account);
+    function updateConfig(
+        uint256 newThreshold,
+        address[] calldata ownersToAdd,
+        address[] calldata ownersToRemove
+    )
+        public
+    {
+        _updateConfig(newThreshold, ownersToAdd, ownersToRemove);
     }
-
-    function addOwner(address owner) external moduleIsInitialized {
-        address account = msg.sender;
-        _addOwner(account, owner);
-        _checkInvariants(account);
-    }
-    
-    function removeOwner(address owner) external moduleIsInitialized {
-        address account = msg.sender;
-        _removeOwner(account, owner);
-        _checkInvariants(account);
-    }
-
-    function setThreshold(uint256 threshold) external moduleIsInitialized {
-        address account = msg.sender;
-        _setThreshold(account, threshold);
-        _checkInvariants(account);
-    }
-
-    function replaceOwner(address prevOwner, address newOwner) external moduleIsInitialized {
-        address account = msg.sender;
-        _removeOwner(account, prevOwner);
-        _addOwner(account, newOwner);
-        _checkInvariants(account);
-    }
-
-    // ** CONFIG ** //
 
     function onInstall(bytes calldata data)
         external
         override
         moduleIsNotInitialized
+        checkInvariants
     {
         address account = msg.sender;
         (uint256 threshold, address[] memory newOwners) = abi.decode(data, (uint256, address[]));
 
         _addOwners(account, newOwners);
         _setThreshold(account, threshold);
-        _checkInvariants(account);
 
         emit ModuleInitialized(account);
     }
@@ -356,4 +343,3 @@ contract ContangoOwnableValidator is ERC7579ValidatorBase {
         return "1.0.0";
     }
 }
-
