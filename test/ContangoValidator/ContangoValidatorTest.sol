@@ -66,12 +66,11 @@ contract ContangoTestValidator is ContangoValidator {
         super._updateConfig(this.thresholds(msg.sender), config);
     }
 
-    function updateConfig(
+    function updateConfiguration(
         uint256 newThreshold,
         CredentialUpdateConfig calldata config
     )
         external
-        override
     {
         super._updateConfig(newThreshold, config);
     }

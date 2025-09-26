@@ -14,6 +14,7 @@ import { EnumerableSet } from "@erc7579/enumerablemap4337/EnumerableSet4337.sol"
 import { EnumerableMap } from "@erc7579/enumerablemap4337/EnumerableMap4337.sol";
 import { WebAuthn } from "@webauthn-sol/WebAuthn.sol";
 import { Base64Url } from "FreshCryptoLib/utils/Base64Url.sol";
+import { console2 } from "forge-std/console2.sol";
 
 contract ContangoValidatorTest is BaseTest {
     using LibSort for *;
@@ -32,6 +33,7 @@ contract ContangoValidatorTest is BaseTest {
 
     uint256 _threshold = 2;
     EnumerableMap.AddressToUintMap ecdsaOwnersMap; // key is address, value is private key (uint256)
+    EnumerableSet.Bytes32Set webAuthnCredentialIdsSet; // key is credential id
 
     // WebAuthn test data
     ContangoValidator.WebAuthnCredential[] _webAuthnCredentials;
@@ -139,82 +141,92 @@ contract ContangoValidatorTest is BaseTest {
         return bytes32(0xf631058a3ba1116acce12396fad0a125b5041c43f8e15723709f81aa8d5f4ccf);
     }
 
-    /*//////////////////////////////////////////////////////////////////////////
-                                      TESTS
-    //////////////////////////////////////////////////////////////////////////*/
-
     /*//////////////////////////////////////////////////////////////
                                  INSTALL
     //////////////////////////////////////////////////////////////*/
 
-    function test_OnInstallRevertWhen_ModuleIsInitialized() public {
-        bytes memory data =
-            abi.encode(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
-        validator.onInstall(data);
-
-        vm.expectRevert();
-        validator.onInstall(data);
-    }
-
-    function test_OnInstallRevertWhen_ThresholdIs0() public whenModuleIsNotInitialized {
-        bytes memory data = abi.encode(0, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+    function test_OnInstall_RevertWhen_ModuleIsAlreadyInitialized() public {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         vm.expectRevert(
-            abi.encodeWithSelector(ContangoValidator.InvalidThreshold.selector, 0, 1, 4)
+            abi.encodeWithSelector(IERC7579Module.ModuleAlreadyInitialized.selector, address(this))
         );
-        validator.onInstall(data);
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
     }
 
-    function test_OnInstallWhenThresholdIsValid() public whenModuleIsNotInitialized {
-        bytes memory data =
-            abi.encode(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
-        validator.onInstall(data);
-
-        uint256 threshold = validator.thresholds(address(this));
-        assertEq(threshold, _threshold);
-    }
-
-    function test_OnInstallRevertWhen_TotalCredentialsLengthIsLessThanThreshold()
+    function test_OnInstall_RevertWhen_TotalCredentialsLengthIsLessThanThreshold()
         public
-        whenModuleIsNotInitialized
     {
-        bytes memory data = abi.encode(5, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
-
         vm.expectRevert(
             abi.encodeWithSelector(ContangoValidator.InvalidThreshold.selector, 5, 1, 4)
         );
-        validator.onInstall(data);
+        installWithValidParameters(5, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
     }
 
-    function test_OnInstallRevertWhen_TotalCredentialsLengthIsMoreThanMax()
+    function test_OnInstall_RevertWhen_TotalECDSAOwnersLengthIsMoreThanMax()
         external
-        whenModuleIsNotInitialized
     {
         // Create 33 total credentials (exceeding MAX_TOTAL_CREDENTIALS)
         address[] memory _ecdsaOwners = new address[](33);
         for (uint256 i = 0; i < 33; i++) {
             _ecdsaOwners[i] = makeAddr(vm.toString(i));
         }
-        bytes memory data =
-            abi.encode(_threshold, _ecdsaOwners, new ContangoValidator.WebAuthnCredential[](0));
 
         vm.expectRevert(
             abi.encodeWithSelector(ContangoValidator.InvalidCredentialsCount.selector, 33, 1, 32)
         );
-        validator.onInstall(data);
+        installWithValidParameters(_threshold, _ecdsaOwners, new ContangoValidator.WebAuthnCredential[](0));
     }
 
-    function test_OnInstallRevertWhen_WebAuthnCredentialsNotUnique()
+
+    function test_OnInstall_RevertWhen_TotalWebAuthnCredentialsLengthIsMoreThanMax()
+        external
+    {
+
+        // Create array with 33 credentials (exceeding MAX_CREDENTIALS)
+        ContangoValidator.WebAuthnCredential[] memory webAuthnCredentials =
+            new ContangoValidator.WebAuthnCredential[](33);
+
+        for (uint256 i = 0; i < 33; i++) {
+            webAuthnCredentials[i] = ContangoValidator.WebAuthnCredential({
+                pubKeyX: i + 1000,
+                pubKeyY: i + 2000,
+                requireUV: (i % 2 == 0) // Alternate true/false
+             });
+        }
+
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoValidator.InvalidCredentialsCount.selector, 33, 1, 32)
+        );
+        installWithValidParameters(_threshold, new address[](0), webAuthnCredentials);
+    }
+
+
+    function test_OnInstall_RevertWhen_OwnersCredentialsNotUnique()
         public
-        whenModuleIsNotInitialized
+    {
+        address[] memory duplicateOwners =
+            new address[](2);
+        duplicateOwners[0] = ecdsaOwnersMap.keys(address(this))[0];
+        duplicateOwners[1] = ecdsaOwnersMap.keys(address(this))[0];
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoValidator.AddECDSAOwnerError_OwnerAlreadyExists.selector,
+                address(this),
+                duplicateOwners[0]
+            )
+        );
+        installWithValidParameters(_threshold, duplicateOwners, new ContangoValidator.WebAuthnCredential[](0));
+    }
+
+    function test_OnInstall_RevertWhen_WebAuthnCredentialsNotUnique()
+        public
     {
         ContangoValidator.WebAuthnCredential[] memory duplicateCredentials =
             new ContangoValidator.WebAuthnCredential[](2);
         duplicateCredentials[0] = _webAuthnCredentials[0];
         duplicateCredentials[1] = _webAuthnCredentials[0];
-
-        bytes memory data =
-            abi.encode(_threshold, ecdsaOwnersMap.keys(address(this)), duplicateCredentials);
 
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -223,414 +235,77 @@ contract ContangoValidatorTest is BaseTest {
                 duplicateCredentials[0]
             )
         );
-        validator.onInstall(data);
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), duplicateCredentials);
     }
 
-    function test_OnInstallWhenCredentialsAreValid() public whenModuleIsNotInitialized {
-        bytes memory data =
-            abi.encode(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
-        validator.onInstall(data);
+    function test_OnInstall_RevertWhen_ThresholdIs0() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoValidator.InvalidThreshold.selector, 0, 1, 4)
+        );
+        installWithValidParameters(0, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+    }
 
-        // Check ECDSA owners
-        address[] memory ecdsaOwners = validator.getECDSAOwners(address(this));
-        assertEq(ecdsaOwners.length, ecdsaOwnersMap.keys(address(this)).length);
+    function test_OnInstall_SuccessWhen_WhenThresholdIsValid_1() public {
+        installWithValidParameters(1, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+    }
 
-        // Check WebAuthn credentials
-        ContangoValidator.WebAuthnCredential[] memory webAuthnCredentials =
-            validator.getWebAuthnCredentials(address(this));
-        assertEq(webAuthnCredentials.length, _webAuthnCredentials.length);
+    function test_OnInstall_SuccessWhen_WhenThresholdIsValid_2() public {
+        installWithValidParameters(2, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+    }
 
-        // Check total credentials count
-        (uint256 ecdsaOwnersCount, uint256 webAuthnCredentialsCount) = validator.getCredentialsCount(address(this));
-        assertEq(ecdsaOwnersCount + webAuthnCredentialsCount, 4);
+    function test_OnInstall_SuccessWhen_WhenThresholdIsValid_3() public {
+        installWithValidParameters(3, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+    }
+
+    function test_OnInstall_SuccessWhen_WhenThresholdIsValid_4() public {
+        installWithValidParameters(4, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+    }
+
+    function test_OnInstall_RevertWhen_ThresholdIsMoreThanTotalCredentialsCount() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoValidator.InvalidThreshold.selector, 5, 1, 4)
+        );
+        installWithValidParameters(5, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+    }
+
+    function test_OnInstall_SuccessWhen_CredentialsAreValidOnlyECDSA() public {
+        // params
+        uint256 threshold = 2;
+        ContangoValidator.WebAuthnCredential[] memory credentialsToAdd = new ContangoValidator.WebAuthnCredential[](0);
+        address[] memory ownersToAdd = ecdsaOwnersMap.keys(address(this));
+
+        installWithValidParameters(threshold, ownersToAdd, credentialsToAdd);
+        validateOwnersCredentialsAndThreshold(ownersToAdd, credentialsToAdd, threshold);
+    }
+
+
+    function test_OnInstall_SuccessWhen_CredentialsAreValidOnlyWebAuthn() public {
+        uint256 threshold = 2;
+        ContangoValidator.WebAuthnCredential[] memory credentialsToAdd = _webAuthnCredentials;
+        address[] memory ownersToAdd = new address[](0);
+
+        installWithValidParameters(threshold, ownersToAdd, credentialsToAdd);
+        validateOwnersCredentialsAndThreshold(ownersToAdd, credentialsToAdd, threshold);
     }
 
     /*//////////////////////////////////////////////////////////////
                                 UNINSTALL
     //////////////////////////////////////////////////////////////*/
 
-    function test_OnUninstallShouldRemoveAllCredentials() public {
-        test_OnInstallWhenCredentialsAreValid();
+    function test_OnUninstall_ShouldRemoveAllCredentialsAndThreshold() public {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         validator.onUninstall("");
-
-        (uint256 ecdsaOwnersCount, uint256 webAuthnCredentialsCount) = validator.getCredentialsCount(address(this));
-        assertEq(ecdsaOwnersCount + webAuthnCredentialsCount, 0);
+        validateOwnersCredentialsAndThreshold(new address[](0), new ContangoValidator.WebAuthnCredential[](0), 0);
     }
 
-    function test_OnUninstallShouldSetThresholdTo0() public {
-        test_OnInstallWhenCredentialsAreValid();
-
-        validator.onUninstall("");
-
-        uint256 threshold = validator.thresholds(address(this));
-        assertEq(threshold, 0);
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                               INITIALIZATION
-    //////////////////////////////////////////////////////////////*/
-
-    function test_IsInitializedWhenModuleIsNotInitialized() external view {
-        bool isInitialized = validator.isInitialized(address(this));
-        assertFalse(isInitialized);
-    }
-
-    function test_IsInitializedWhenModuleIsInitialized() public {
-        test_OnInstallWhenCredentialsAreValid();
-
-        bool isInitialized = validator.isInitialized(address(this));
-        assertTrue(isInitialized);
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                              THRESHOLD MANAGEMENT
-    //////////////////////////////////////////////////////////////*/
-
-    function test_SetThresholdRevertWhen_ModuleIsNotInitialized() external {
-        vm.expectRevert(
-            abi.encodeWithSelector(IERC7579Module.NotInitialized.selector, address(this))
-        );
-        validator.setThreshold(1);
-    }
-
-    function test_SetThresholdRevertWhen_ThresholdIs0() external whenModuleIsInitialized {
-        test_OnInstallWhenCredentialsAreValid();
-
-        vm.expectRevert(
-            abi.encodeWithSelector(ContangoValidator.InvalidThreshold.selector, 0, 1, 4)
-        );
-        validator.setThreshold(0);
-    }
-
-    function test_SetThresholdRevertWhen_ThresholdIsHigherThanTotalCredentialsCount()
-        external
-        whenModuleIsInitialized
-    {
-        test_OnInstallWhenCredentialsAreValid();
-
-        vm.expectRevert(
-            abi.encodeWithSelector(ContangoValidator.InvalidThreshold.selector, 10, 1, 4)
-        );
-        validator.setThreshold(10);
-    }
-
-    function test_SetThresholdWhenThresholdIsValid() external whenModuleIsInitialized {
-        test_OnInstallWhenCredentialsAreValid();
-
-        uint256 oldThreshold = validator.thresholds(address(this));
-        uint256 newThreshold = 1;
-        assertNotEq(oldThreshold, newThreshold);
-
-        validator.setThreshold(newThreshold);
-
-        assertEq(validator.thresholds(address(this)), newThreshold);
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                            ECDSA CREDENTIAL MANAGEMENT
-    //////////////////////////////////////////////////////////////*/
-
-    function test_AddECDSAOwnerRevertWhen_ModuleIsNotInitialized() external {
-        vm.expectRevert(
-            abi.encodeWithSelector(IERC7579Module.NotInitialized.selector, address(this))
-        );
-        validator.addECDSAOwner(address(1));
-    }
-
-    function test_AddECDSAOwnerRevertWhen_TotalCredentialsCountIsMoreThanMax()
-        external
-        whenModuleIsInitialized
-    {
-        // Install with 32 ECDSA owners
-        address[] memory _ecdsaOwners = new address[](32);
-        for (uint256 i = 0; i < 32; i++) {
-            _ecdsaOwners[i] = makeAddr(vm.toString(i));
-        }
-        bytes memory data =
-            abi.encode(1, _ecdsaOwners, new ContangoValidator.WebAuthnCredential[](0));
-        validator.onInstall(data);
-
-        vm.expectRevert(
-            abi.encodeWithSelector(ContangoValidator.InvalidCredentialsCount.selector, 33, 1, 32)
-        );
-        validator.addECDSAOwner(makeAddr("finalOwner"));
-    }
-
-    function test_AddECDSAOwnerRevertWhen_OwnerAlreadyExists() external whenModuleIsInitialized {
-        test_OnInstallWhenCredentialsAreValid();
-
-        address[] memory owners = ecdsaOwnersMap.keys(address(this));
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                ContangoValidator.AddECDSAOwnerError_OwnerAlreadyExists.selector,
-                address(this),
-                owners[0]
-            )
-        );
-        validator.addECDSAOwner(owners[0]);
-    }
-
-    function test_AddECDSAOwnerWhenOwnerIsValid() external whenModuleIsInitialized {
-        test_OnInstallWhenCredentialsAreValid();
-
-        address newOwner = address(3);
-        validator.addECDSAOwner(newOwner);
-
-        assertTrue(validator.isECDSAOwner(address(this), newOwner));
-        (uint256 ecdsaOwnersCount, uint256 webAuthnCredentialsCount) = validator.getCredentialsCount(address(this));
-        assertEq(ecdsaOwnersCount, 3);
-        assertEq(ecdsaOwnersCount + webAuthnCredentialsCount, 5);
-    }
-
-    function test_RemoveECDSAOwnerRevertWhen_ModuleIsNotInitialized() external {
-        vm.expectRevert(
-            abi.encodeWithSelector(IERC7579Module.NotInitialized.selector, address(this))
-        );
-        validator.removeECDSAOwner(address(1));
-    }
-
-    function test_RemoveECDSAOwnerRevertWhen_OwnerDoesNotExist() external whenModuleIsInitialized {
-        test_OnInstallWhenCredentialsAreValid();
-
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                ContangoValidator.RemoveECDSAOwnerError_OwnerDoesNotExist.selector,
-                address(this),
-                address(999)
-            )
-        );
-        validator.removeECDSAOwner(address(999));
-    }
-
-    function test_RemoveECDSAOwnerWhenOwnerExists() external whenModuleIsInitialized {
-        test_OnInstallWhenCredentialsAreValid();
-
-        address[] memory owners = ecdsaOwnersMap.keys(address(this));
-        validator.removeECDSAOwner(owners[0]);
-
-        assertFalse(validator.isECDSAOwner(address(this), owners[0]));
-        (uint256 ecdsaOwnersCount, uint256 webAuthnCredentialsCount) = validator.getCredentialsCount(address(this));
-        assertEq(ecdsaOwnersCount, 1);
-        assertEq(webAuthnCredentialsCount, 2);
-        assertEq(ecdsaOwnersCount + webAuthnCredentialsCount, 3);
-    }
-
-    function test_ReplaceWebAuthnCredential() external whenModuleIsInitialized {
-        test_OnInstallWhenCredentialsAreValid();
-
-        ContangoValidator.WebAuthnCredential memory newCredential = ContangoValidator.WebAuthnCredential({
-            pubKeyX: _webAuthnCredentials[0].pubKeyX,
-            pubKeyY: _webAuthnCredentials[0].pubKeyY,
-            requireUV: !_webAuthnCredentials[0].requireUV
-        });
-
-        bytes32[] memory credentialIdsToRemove = new bytes32[](1);
-        credentialIdsToRemove[0] = validator.generateCredentialId(address(this), _webAuthnCredentials[0]);
-
-        ContangoValidator.WebAuthnCredential[] memory credentialsToAdd = new ContangoValidator.WebAuthnCredential[](1);
-        credentialsToAdd[0] = newCredential;
-
-        validator.updateConfig(validator.thresholds(address(this)), ContangoValidator.CredentialUpdateConfig({
-            ecdsaOwnersToAdd: new address[](0),
-            ecdsaOwnersToRemove: new address[](0),
-            webAuthnCredentialsToAdd: credentialsToAdd,
-            webAuthnCredentialsToRemove: credentialIdsToRemove
-        }));
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                          WEBAUTHN CREDENTIAL MANAGEMENT
-    //////////////////////////////////////////////////////////////*/
-
-    function test_AddWebAuthnCredentialRevertWhen_ModuleIsNotInitialized() external {
-        vm.expectRevert(
-            abi.encodeWithSelector(IERC7579Module.NotInitialized.selector, address(this))
-        );
-        validator.addWebAuthnCredential(_webAuthnCredentials[0]);
-    }
-
-    function test_AddWebAuthnCredentialRevertWhen_TotalCredentialsCountIsMoreThanMax()
-        external
-        whenModuleIsInitialized
-    {
-        // Install with 32 WebAuthn credentials
-        ContangoValidator.WebAuthnCredential[] memory _credentials =
-            new ContangoValidator.WebAuthnCredential[](32);
-        for (uint256 i = 0; i < 32; i++) {
-            _credentials[i] = ContangoValidator.WebAuthnCredential({
-                pubKeyX: i + 1000,
-                pubKeyY: i + 2000,
-                requireUV: (i % 2 == 0)
-            });
-        }
-        bytes memory data = abi.encode(1, new address[](0), _credentials);
-        validator.onInstall(data);
-
-        ContangoValidator.WebAuthnCredential memory newCredential = ContangoValidator
-            .WebAuthnCredential({ pubKeyX: 99_999, pubKeyY: 88_888, requireUV: true });
-
-        vm.expectRevert(
-            abi.encodeWithSelector(ContangoValidator.InvalidCredentialsCount.selector, 33, 1, 32)
-        );
-        validator.addWebAuthnCredential(newCredential);
-    }
-
-    function test_AddWebAuthnCredentialRevertWhen_CredentialAlreadyExists()
-        external
-        whenModuleIsInitialized
-    {
-        test_OnInstallWhenCredentialsAreValid();
-
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                ContangoValidator.AddWebAuthnCredentialError_CredentialAlreadyExists.selector,
-                address(this),
-                _webAuthnCredentials[0]
-            )
-        );
-        validator.addWebAuthnCredential(_webAuthnCredentials[0]);
-    }
-
-    function test_AddWebAuthnCredentialWhenCredentialIsValid() external whenModuleIsInitialized {
-        test_OnInstallWhenCredentialsAreValid();
-
-        ContangoValidator.WebAuthnCredential memory newCredential = ContangoValidator
-            .WebAuthnCredential({ pubKeyX: 99_999, pubKeyY: 88_888, requireUV: true });
-
-        validator.addWebAuthnCredential(newCredential);
-
-        bytes32 newCredentialId = validator.generateCredentialId(address(this), newCredential);
-
-        assertTrue(validator.hasWebAuthnCredential(address(this), newCredential));
-        assertTrue(validator.hasWebAuthnCredentialById(address(this), newCredentialId));
-        (uint256 ecdsaOwnersCount, uint256 webAuthnCredentialsCount) = validator.getCredentialsCount(address(this));
-        assertEq(ecdsaOwnersCount, 2);
-        assertEq(webAuthnCredentialsCount, 3);
-        assertEq(ecdsaOwnersCount + webAuthnCredentialsCount, 5);
-    }
-
-    function test_RemoveWebAuthnCredentialRevertWhen_ModuleIsNotInitialized() external {
-        vm.expectRevert(
-            abi.encodeWithSelector(IERC7579Module.NotInitialized.selector, address(this))
-        );
-        validator.removeWebAuthnCredential(_webAuthnCredentials[0]);
-    }
-
-    function test_RemoveWebAuthnCredentialRevertWhen_CredentialDoesNotExist()
-        external
-        whenModuleIsInitialized
-    {
-        test_OnInstallWhenCredentialsAreValid();
-
-        ContangoValidator.WebAuthnCredential memory nonExistentCredential = ContangoValidator
-            .WebAuthnCredential({ pubKeyX: 99_999, pubKeyY: 88_888, requireUV: true });
-
-        bytes32 credentialId = validator.generateCredentialId(address(this), nonExistentCredential);
-
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                ContangoValidator.RemoveWebAuthnCredentialError_CredentialDoesNotExist.selector,
-                address(this),
-                credentialId
-            )
-        );
-        validator.removeWebAuthnCredential(nonExistentCredential);
-    }
-
-    function test_RemoveWebAuthnCredentialWhenCredentialExists() external whenModuleIsInitialized {
-        test_OnInstallWhenCredentialsAreValid();
-
-        validator.removeWebAuthnCredential(_webAuthnCredentials[0]);
-
-        assertFalse(validator.hasWebAuthnCredential(address(this), _webAuthnCredentials[0]));
-        (uint256 ecdsaOwnersCount, uint256 webAuthnCredentialsCount) = validator.getCredentialsCount(address(this));
-        assertEq(ecdsaOwnersCount, 2);
-        assertEq(webAuthnCredentialsCount, 1);
-        assertEq(ecdsaOwnersCount + webAuthnCredentialsCount, 3);
-    }
-
-    /*//////////////////////////////////////////////////////////////
-                            CONFIGURATION UPDATES
-    //////////////////////////////////////////////////////////////*/
-
-    function test_UpdateConfigRevertWhen_ModuleIsNotInitialized() external {
-        ContangoValidator.CredentialUpdateConfig memory config = ContangoValidator
-            .CredentialUpdateConfig({
-            ecdsaOwnersToAdd: new address[](0),
-            ecdsaOwnersToRemove: new address[](0),
-            webAuthnCredentialsToAdd: new ContangoValidator.WebAuthnCredential[](0),
-            webAuthnCredentialsToRemove: new bytes32[](0)
-        });
-
-        vm.expectRevert(
-            abi.encodeWithSelector(IERC7579Module.NotInitialized.selector, address(this))
-        );
-        validator.updateConfig(1, config);
-    }
-
-    function test_UpdateConfigWhenAddingBothCredentialTypes() external whenModuleIsInitialized {
-        test_OnInstallWhenCredentialsAreValid();
-
-        address newECDSAOwner = address(3);
-        ContangoValidator.WebAuthnCredential memory newWebAuthnCredential = ContangoValidator
-            .WebAuthnCredential({ pubKeyX: 99_999, pubKeyY: 88_888, requireUV: true });
-
-        ContangoValidator.CredentialUpdateConfig memory config = ContangoValidator
-            .CredentialUpdateConfig({
-            ecdsaOwnersToAdd: new address[](1),
-            ecdsaOwnersToRemove: new address[](0),
-            webAuthnCredentialsToAdd: new ContangoValidator.WebAuthnCredential[](1),
-            webAuthnCredentialsToRemove: new bytes32[](0)
-        });
-        config.ecdsaOwnersToAdd[0] = newECDSAOwner;
-        config.webAuthnCredentialsToAdd[0] = newWebAuthnCredential;
-
-        validator.updateConfig(3, config);
-
-        assertTrue(validator.isECDSAOwner(address(this), newECDSAOwner));
-        assertTrue(validator.hasWebAuthnCredential(address(this), newWebAuthnCredential));
-        (uint256 ecdsaOwnersCount, uint256 webAuthnCredentialsCount) = validator.getCredentialsCount(address(this));
-        assertEq(ecdsaOwnersCount, 3);
-        assertEq(webAuthnCredentialsCount, 3);
-        assertEq(ecdsaOwnersCount + webAuthnCredentialsCount, 6);
-        assertEq(validator.thresholds(address(this)), 3);
-    }
-
-    function test_UpdateConfigWhenRemovingBothCredentialTypes() external whenModuleIsInitialized {
-        test_OnInstallWhenCredentialsAreValid();
-
-        address[] memory owners = ecdsaOwnersMap.keys(address(this));
-        bytes32[] memory credentialIdsToRemove = new bytes32[](1);
-        credentialIdsToRemove[0] =
-            validator.generateCredentialId(address(this), _webAuthnCredentials[0]);
-
-        ContangoValidator.CredentialUpdateConfig memory config = ContangoValidator
-            .CredentialUpdateConfig({
-            ecdsaOwnersToAdd: new address[](0),
-            ecdsaOwnersToRemove: new address[](1),
-            webAuthnCredentialsToAdd: new ContangoValidator.WebAuthnCredential[](0),
-            webAuthnCredentialsToRemove: credentialIdsToRemove
-        });
-        config.ecdsaOwnersToRemove[0] = owners[0];
-
-        validator.updateConfig(1, config);
-
-        assertFalse(validator.isECDSAOwner(address(this), owners[0]));
-        assertFalse(validator.hasWebAuthnCredential(address(this), _webAuthnCredentials[0]));
-        (uint256 ecdsaOwnersCount, uint256 webAuthnCredentialsCount) = validator.getCredentialsCount(address(this));
-        assertEq(ecdsaOwnersCount, 1);
-        assertEq(webAuthnCredentialsCount, 1);
-        assertEq(ecdsaOwnersCount + webAuthnCredentialsCount, 2);
-        assertEq(validator.thresholds(address(this)), 1);
-    }
 
     /*//////////////////////////////////////////////////////////////
                                 VIEW FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
     function test_GetECDSAOwners() external {
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         address[] memory owners = validator.getECDSAOwners(address(this));
         address[] memory expectedOwners = ecdsaOwnersMap.keys(address(this));
@@ -643,7 +318,7 @@ contract ContangoValidatorTest is BaseTest {
     }
 
     function test_GetWebAuthnCredentials() external {
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         ContangoValidator.WebAuthnCredential[] memory credentials =
             validator.getWebAuthnCredentials(address(this));
@@ -662,13 +337,330 @@ contract ContangoValidatorTest is BaseTest {
 
     function test_GenerateCredentialId() external view {
         bytes32 credId1 = validator.generateCredentialId(address(this), _webAuthnCredentials[0]);
-        bytes32 credId2 = validator.generateCredentialId(address(this), _webAuthnCredentials[0]);
-        assertEq(credId1, credId2, "Credential ID generation should be deterministic");
 
-        bytes32 credId3 = validator.generateCredentialId(address(1), _webAuthnCredentials[0]);
-        assertTrue(
-            credId1 != credId3, "Different addresses should produce different credential IDs"
+        bytes32 credId2 = validator.generateCredentialId(address(1), _webAuthnCredentials[0]);
+        assertFalse(
+            credId1 == credId2, "Different addresses should produce different credential IDs"
         );
+
+        bytes32 credId3 = validator.generateCredentialId(address(this), ContangoValidator.WebAuthnCredential({
+            pubKeyX: _webAuthnCredentials[0].pubKeyX,
+            pubKeyY: _webAuthnCredentials[0].pubKeyY,
+            requireUV: !_webAuthnCredentials[0].requireUV
+        }));
+        assertTrue(
+            credId1 == credId3, "Different requireUV should not produce different credential IDs"
+        );
+    }
+    
+    function test_view_testAllViewFunctionsInOneGo() public {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+
+        // Check ECDSA owners
+        address[] memory ecdsaOwners = validator.getECDSAOwners(address(this));
+        assertEq(ecdsaOwners.length, ecdsaOwnersMap.keys(address(this)).length);
+        for (uint256 i = 0; i < ecdsaOwners.length; i++) {
+            assertTrue(ecdsaOwnersMap.contains(address(this), ecdsaOwners[i]));
+        }
+
+        // Check WebAuthn credentials
+        ContangoValidator.WebAuthnCredential[] memory webAuthnCredentials =
+            validator.getWebAuthnCredentials(address(this));
+        assertEq(webAuthnCredentials.length, _webAuthnCredentials.length);
+
+        // Check total credentials count
+        (uint256 ecdsaOwnersCount, uint256 webAuthnCredentialsCount) = validator.getCredentialsCount(address(this));
+        assertEq(ecdsaOwnersCount + webAuthnCredentialsCount, 4);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                               INITIALIZATION
+    //////////////////////////////////////////////////////////////*/
+
+    function test_IsInitializedWhenModuleIsNotInitialized() external view {
+        bool isInitialized = validator.isInitialized(address(this));
+        assertFalse(isInitialized);
+    }
+
+    function test_IsInitializedWhenModuleIsInitialized() public {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+
+        bool isInitialized = validator.isInitialized(address(this));
+        assertTrue(isInitialized);
+    }
+
+    function test_RevertWhen_UpdateConfig_ModuleIsNotInitialized() external {
+        uint256 threshold = validator.thresholds(address(this));
+        vm.expectRevert(
+            abi.encodeWithSelector(IERC7579Module.NotInitialized.selector, address(this))
+        );
+        validator.updateConfiguration(threshold, ContangoValidator.CredentialUpdateConfig({
+            ecdsaOwnersToAdd: new address[](0),
+            ecdsaOwnersToRemove: new address[](0),
+            webAuthnCredentialsToAdd: new ContangoValidator.WebAuthnCredential[](0),
+            webAuthnCredentialsToRemove: new bytes32[](0)
+        }));
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                              THRESHOLD MANAGEMENT
+    //////////////////////////////////////////////////////////////*/
+
+    // setThreshold, addECDSAOwner, addWebAuthnCredential, removeECDSAOwner, removeWebAuthnCredential are just helper functions that call updateConfig
+    // defined in ContangoValidatorTest.sol and are only there to make tests more concise
+
+    function test_SetThreshold_RevertWhen_ThresholdIs0() external {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoValidator.InvalidThreshold.selector, 0, 1, 4)
+        );
+        validator.setThreshold(0);
+    }
+
+
+    function test_SetThreshold_RevertWhen_ThresholdIsGreaterThanTotalCredentialsCount() external {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoValidator.InvalidThreshold.selector, 5, 1, 4)
+        );
+        validator.setThreshold(5);
+    }
+
+
+    function test_SetThreshold_SuccessWhen_ThresholdIsValid() external {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+        uint256 newThreshold = 3;
+        validator.setThreshold(newThreshold);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        ECDSA OWNER MANAGEMENT
+    //////////////////////////////////////////////////////////////*/
+
+    function test_AddECDSAOwner_RevertWhen_TotalCredentialsCountIsMoreThanMax()
+        external
+    {
+        // Install with 32 ECDSA owners
+        address[] memory _ecdsaOwners = new address[](32);
+        for (uint256 i = 0; i < 32; i++) {
+            _ecdsaOwners[i] = makeAddr(vm.toString(i));
+        }
+        installWithValidParameters(_threshold, _ecdsaOwners, new ContangoValidator.WebAuthnCredential[](0));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoValidator.InvalidCredentialsCount.selector, 33, 1, 32)
+        );
+        validator.addECDSAOwner(makeAddr("finalOwner"));
+    }
+
+    function test_AddECDSAOwner_RevertWhen_OwnerAlreadyExists() external {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+
+        address[] memory owners = ecdsaOwnersMap.keys(address(this));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoValidator.AddECDSAOwnerError_OwnerAlreadyExists.selector,
+                address(this),
+                owners[0]
+            )
+        );
+        validator.addECDSAOwner(owners[0]);
+    }
+
+    function test_AddECDSAOwner_SuccessWhen_OwnerIsValid() external {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+
+        address newOwner = address(3);
+        validator.addECDSAOwner(newOwner);
+
+        assertTrue(validator.isECDSAOwner(address(this), newOwner));
+        (uint256 ecdsaOwnersCount, uint256 webAuthnCredentialsCount) = validator.getCredentialsCount(address(this));
+        assertEq(ecdsaOwnersCount, 3);
+        assertEq(ecdsaOwnersCount + webAuthnCredentialsCount, 5);
+    }
+
+    function test_RemoveECDSAOwner_RevertWhen_OwnerDoesNotExist() external {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoValidator.RemoveECDSAOwnerError_OwnerDoesNotExist.selector,
+                address(this),
+                address(999)
+            )
+        );
+        validator.removeECDSAOwner(address(999));
+    }
+
+    function test_RemoveECDSAOwner_SuccessWhen_OwnerExists() external {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+
+        address[] memory owners = ecdsaOwnersMap.keys(address(this));
+        validator.removeECDSAOwner(owners[0]);
+
+        assertFalse(validator.isECDSAOwner(address(this), owners[0]));
+        validateCredentialsCount(1, 2);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                          WEBAUTHN CREDENTIAL MANAGEMENT
+    //////////////////////////////////////////////////////////////*/
+
+
+    function test_ReplaceWebAuthnCredential_SuccessWhen_CredentialExists() external {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+
+        ContangoValidator.WebAuthnCredential memory newCredential = ContangoValidator.WebAuthnCredential({
+            pubKeyX: _webAuthnCredentials[0].pubKeyX,
+            pubKeyY: _webAuthnCredentials[0].pubKeyY,
+            requireUV: !_webAuthnCredentials[0].requireUV
+        });
+
+        bytes32[] memory credentialIdsToRemove = new bytes32[](1);
+        credentialIdsToRemove[0] = validator.generateCredentialId(address(this), _webAuthnCredentials[0]);
+
+        ContangoValidator.WebAuthnCredential[] memory credentialsToAdd = new ContangoValidator.WebAuthnCredential[](1);
+        credentialsToAdd[0] = newCredential;
+
+        validator.updateConfiguration(validator.thresholds(address(this)), ContangoValidator.CredentialUpdateConfig({
+            ecdsaOwnersToAdd: new address[](0),
+            ecdsaOwnersToRemove: new address[](0),
+            webAuthnCredentialsToAdd: credentialsToAdd,
+            webAuthnCredentialsToRemove: credentialIdsToRemove
+        }));
+    }
+
+    function test_AddWebAuthnCredential_RevertWhen_TotalCredentialsCountIsMoreThanMax()
+        external
+    {
+        // Install with 32 WebAuthn credentials
+        ContangoValidator.WebAuthnCredential[] memory _credentials =
+            new ContangoValidator.WebAuthnCredential[](32);
+        for (uint256 i = 0; i < 32; i++) {
+            _credentials[i] = ContangoValidator.WebAuthnCredential({
+                pubKeyX: i + 1000,
+                pubKeyY: i + 2000,
+                requireUV: (i % 2 == 0)
+            });
+        }
+        installWithValidParameters(_threshold, new address[](0), _credentials);
+
+        ContangoValidator.WebAuthnCredential memory newCredential = ContangoValidator
+            .WebAuthnCredential({ pubKeyX: 99_999, pubKeyY: 88_888, requireUV: true });
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoValidator.InvalidCredentialsCount.selector, 33, 1, 32)
+        );
+        validator.addWebAuthnCredential(newCredential);
+    }
+
+    function test_AddWebAuthnCredential_RevertWhen_CredentialAlreadyExists()
+        external
+        whenModuleIsInitialized
+    {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoValidator.AddWebAuthnCredentialError_CredentialAlreadyExists.selector,
+                address(this),
+                _webAuthnCredentials[0]
+            )
+        );
+        validator.addWebAuthnCredential(_webAuthnCredentials[0]);
+    }
+
+    function test_AddWebAuthnCredential_SuccessWhen_CredentialIsValid() external {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+
+        ContangoValidator.WebAuthnCredential memory newCredential = ContangoValidator
+            .WebAuthnCredential({ pubKeyX: 99_999, pubKeyY: 88_888, requireUV: true });
+
+        validator.addWebAuthnCredential(newCredential);
+
+        ContangoValidator.WebAuthnCredential[] memory expectedCredentials = new ContangoValidator.WebAuthnCredential[](3);
+        expectedCredentials[0] = _webAuthnCredentials[0];
+        expectedCredentials[1] = _webAuthnCredentials[1];
+        expectedCredentials[2] = newCredential;
+
+        validateOwnersCredentialsAndThreshold(ecdsaOwnersMap.keys(address(this)), expectedCredentials, _threshold);
+    }
+
+    function test_RemoveWebAuthnCredential_RevertWhen_CredentialDoesNotExist()
+        external
+    {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+
+        ContangoValidator.WebAuthnCredential memory nonExistentCredential = ContangoValidator
+            .WebAuthnCredential({ pubKeyX: 99_999, pubKeyY: 88_888, requireUV: true });
+
+        bytes32 credentialId = validator.generateCredentialId(address(this), nonExistentCredential);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoValidator.RemoveWebAuthnCredentialError_CredentialDoesNotExist.selector,
+                address(this),
+                credentialId
+            )
+        );
+        validator.removeWebAuthnCredential(nonExistentCredential);
+    }
+
+    function test_RemoveWebAuthnCredential_SuccessWhen_CredentialExists() external {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+
+        validator.removeWebAuthnCredential(_webAuthnCredentials[0]);
+        validateCredentialsCount(2, 1);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    CREDENTIAL MANAGEMENT ACROSS TYPES
+    //////////////////////////////////////////////////////////////*/
+
+
+    function test_UpdateConfig_SuccessWhen_AddingBothCredentialTypes() external {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+
+        address newECDSAOwner = address(3);
+        ContangoValidator.WebAuthnCredential memory newWebAuthnCredential = ContangoValidator
+            .WebAuthnCredential({ pubKeyX: 99_999, pubKeyY: 88_888, requireUV: true });
+
+        ContangoValidator.CredentialUpdateConfig memory config = ContangoValidator
+            .CredentialUpdateConfig({
+            ecdsaOwnersToAdd: new address[](1),
+            ecdsaOwnersToRemove: new address[](0),
+            webAuthnCredentialsToAdd: new ContangoValidator.WebAuthnCredential[](1),
+            webAuthnCredentialsToRemove: new bytes32[](0)
+        });
+        config.ecdsaOwnersToAdd[0] = newECDSAOwner;
+        config.webAuthnCredentialsToAdd[0] = newWebAuthnCredential;
+
+        validator.updateConfiguration(validator.thresholds(address(this)), config);
+
+
+        assertTrue(validator.isECDSAOwner(address(this), newECDSAOwner));
+        assertTrue(validator.hasWebAuthnCredential(address(this), newWebAuthnCredential));
+        validateCredentialsCount(3, 3);
+    }
+
+    function test_UpdateConfig_SuccessWhen_RemovingBothCredentialTypes() external {
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
+        address[] memory owners = ecdsaOwnersMap.keys(address(this));
+
+        ContangoValidator.CredentialUpdateConfig memory config = ContangoValidator
+            .CredentialUpdateConfig({
+            ecdsaOwnersToAdd: new address[](0),
+            ecdsaOwnersToRemove: new address[](1),
+            webAuthnCredentialsToAdd: new ContangoValidator.WebAuthnCredential[](0),
+            webAuthnCredentialsToRemove: new bytes32[](1)
+        });
+        config.ecdsaOwnersToRemove[0] = owners[0];
+        config.webAuthnCredentialsToRemove[0] = validator.generateCredentialId(address(this), _webAuthnCredentials[0]);
+
+        validator.updateConfiguration(validator.thresholds(address(this)), config);
+
+        assertFalse(validator.isECDSAOwner(address(this), owners[0]));
+        assertFalse(validator.hasWebAuthnCredential(address(this), _webAuthnCredentials[0]));
+        validateCredentialsCount(1, 1);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -701,7 +693,7 @@ contract ContangoValidatorTest is BaseTest {
     }
 
     /*//////////////////////////////////////////////////////////////
-                               VALIDATION (STUBS)
+                               VALIDATION
     //////////////////////////////////////////////////////////////*/
 
     function test_ValidateUserOpReturnsValidationFailed() external view {
@@ -714,9 +706,9 @@ contract ContangoValidatorTest is BaseTest {
         assertEq(validationData, 1); // VALIDATION_FAILED
     }
 
-    function test_ValidateUserOpWithValidECDSASignatures() external whenModuleIsInitialized {
+    function test_ValidateUserOpWithValidECDSASignatures() external {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         PackedUserOperation memory userOp = getEmptyUserOperation();
         userOp.sender = address(this);
@@ -743,9 +735,9 @@ contract ContangoValidatorTest is BaseTest {
         assertEq(validationData, 0); // VALIDATION_SUCCESS
     }
 
-    function test_ValidateUserOpWithInvalidECDSASignatures() external whenModuleIsInitialized {
+    function test_ValidateUserOpWithInvalidECDSASignatures() external {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         PackedUserOperation memory userOp = getEmptyUserOperation();
         userOp.sender = address(this);
@@ -771,10 +763,9 @@ contract ContangoValidatorTest is BaseTest {
 
     function test_ValidateUserOpWithValidSignaturesBelowThreshold()
         external
-        whenModuleIsInitialized
     {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         PackedUserOperation memory userOp = getEmptyUserOperation();
         userOp.sender = address(this);
@@ -806,7 +797,7 @@ contract ContangoValidatorTest is BaseTest {
         whenModuleIsInitialized
     {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         PackedUserOperation memory userOp = getEmptyUserOperation();
         userOp.sender = address(this);
@@ -835,7 +826,7 @@ contract ContangoValidatorTest is BaseTest {
         whenModuleIsInitialized
     {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         bytes32 hash = bytes32(keccak256("hash"));
         address[] memory owners = ecdsaOwnersMap.keys(address(this));
@@ -861,7 +852,7 @@ contract ContangoValidatorTest is BaseTest {
         whenModuleIsInitialized
     {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         bytes32 hash = bytes32(keccak256("hash"));
 
@@ -895,7 +886,7 @@ contract ContangoValidatorTest is BaseTest {
 
     function test_ValidateUserOpWithValidWebAuthnSignatures() external whenModuleIsInitialized {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         PackedUserOperation memory userOp = getEmptyUserOperation();
         userOp.sender = address(this);
@@ -925,7 +916,7 @@ contract ContangoValidatorTest is BaseTest {
 
     function test_ValidateUserOpWithInvalidWebAuthnSignatures() external whenModuleIsInitialized {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         PackedUserOperation memory userOp = getEmptyUserOperation();
         userOp.sender = address(this);
@@ -983,7 +974,7 @@ contract ContangoValidatorTest is BaseTest {
         whenModuleIsInitialized
     {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         PackedUserOperation memory userOp = getEmptyUserOperation();
         userOp.sender = address(this);
@@ -1015,7 +1006,7 @@ contract ContangoValidatorTest is BaseTest {
         whenModuleIsInitialized
     {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         bytes32 hash = createTestUserOpHash();
 
@@ -1041,7 +1032,7 @@ contract ContangoValidatorTest is BaseTest {
         whenModuleIsInitialized
     {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         bytes32 hash = createTestUserOpHash();
 
@@ -1095,9 +1086,9 @@ contract ContangoValidatorTest is BaseTest {
                         MIXED ECDSA + WEBAUTHN SIGNATURE VERIFICATION
     //////////////////////////////////////////////////////////////*/
 
-    function test_ValidateUserOpWithMixedValidSignatures() external whenModuleIsInitialized {
+    function test_ValidateUserOpWithMixedValidSignatures() external {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         PackedUserOperation memory userOp = getEmptyUserOperation();
         userOp.sender = address(this);
@@ -1139,7 +1130,7 @@ contract ContangoValidatorTest is BaseTest {
         whenModuleIsInitialized
     {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         PackedUserOperation memory userOp = getEmptyUserOperation();
         userOp.sender = address(this);
@@ -1167,9 +1158,9 @@ contract ContangoValidatorTest is BaseTest {
         assertEq(validationData, 1); // VALIDATION_FAILED
     }
 
-    function test_ValidateUserOpWithMixedSignaturesOneInvalid() external whenModuleIsInitialized {
+    function test_ValidateUserOpWithMixedSignaturesOneInvalid() external {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         PackedUserOperation memory userOp = getEmptyUserOperation();
         userOp.sender = address(this);
@@ -1219,7 +1210,7 @@ contract ContangoValidatorTest is BaseTest {
 
     function test_ValidateUserOpWithMixedSignaturesBothInvalid() external whenModuleIsInitialized {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         PackedUserOperation memory userOp = getEmptyUserOperation();
         userOp.sender = address(this);
@@ -1268,7 +1259,7 @@ contract ContangoValidatorTest is BaseTest {
         whenModuleIsInitialized
     {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         bytes32 hash = createTestUserOpHash();
         address[] memory owners = ecdsaOwnersMap.keys(address(this));
@@ -1302,7 +1293,7 @@ contract ContangoValidatorTest is BaseTest {
         whenModuleIsInitialized
     {
         // Install the module first
-        test_OnInstallWhenCredentialsAreValid();
+        installWithValidParameters(_threshold, ecdsaOwnersMap.keys(address(this)), _webAuthnCredentials);
 
         bytes32 hash = createTestUserOpHash();
         address[] memory owners = ecdsaOwnersMap.keys(address(this));
@@ -1323,7 +1314,7 @@ contract ContangoValidatorTest is BaseTest {
         assertNotEq(result, EIP1271_MAGIC_VALUE);
     }
 
-    function test_ValidateSignatureWithDataReturnsFalse() external view {
+    function test_ValidateSignatureWithData_ReturnsFalse() external view {
         bytes32 hash = bytes32(keccak256("hash"));
 
         // Create empty unified signature data
@@ -1357,5 +1348,97 @@ contract ContangoValidatorTest is BaseTest {
 
     modifier whenModuleIsInitialized() {
         _;
+    }
+
+    /*//////////////////////////////////////////////////////////////////////////
+                            TEST HELPERS
+    //////////////////////////////////////////////////////////////////////////*/
+
+
+    function validateThreshold(uint256 expectedThreshold) internal {
+        uint256 thresholdOnContract = validator.thresholds(address(this));
+        assertEq(thresholdOnContract, expectedThreshold);
+    }
+
+    function validateECDSAOwners(address[] memory expectedOwners) internal {
+        // sort the expected owners before assertion in for-loop, and ensure that the expected owners passed to this function are unique
+        expectedOwners.sort();
+        uint256 sortedLength = expectedOwners.length;
+        expectedOwners.uniquifySorted();
+        assertEq(expectedOwners.length, sortedLength, "expected ECDSA owners passed are not unique. Fix the test!");
+
+        // sort the ecdsa owners before assertion in for-loop, and ensure that the ecdsa owners are unique
+        address[] memory ecdsaOwners = validator.getECDSAOwners(address(this));
+        ecdsaOwners.sort();
+        sortedLength = ecdsaOwners.length;
+        ecdsaOwners.uniquifySorted();
+        assertEq(ecdsaOwners.length, sortedLength, "ECDSA owners are not unique");
+
+        assertEq(ecdsaOwners.length, expectedOwners.length, "ECDSA owners count mismatch");
+        for (uint256 i = 0; i < ecdsaOwners.length; i++) {
+            assertEq(expectedOwners[i], ecdsaOwners[i]);
+        }
+    }
+
+    function validateWebAuthnCredentials(ContangoValidator.WebAuthnCredential[] memory expectedCredentials) internal {
+        // create the expected credential ids
+        bytes32[] memory expectedCredentialIds = new bytes32[](expectedCredentials.length);
+        for (uint256 i = 0; i < expectedCredentials.length; i++) {
+            expectedCredentialIds[i] = validator.generateCredentialId(address(this), expectedCredentials[i]);
+        }
+        // sort the expected credential ids before assertion in for-loop, and ensure that the expected credential ids are unique
+        expectedCredentialIds.sort();
+        uint256 sortedLength = expectedCredentialIds.length;
+        expectedCredentialIds.uniquifySorted();
+        assertEq(expectedCredentialIds.length, sortedLength, "expected credential ids passed are not unique. Fix the test!");
+
+        ContangoValidator.WebAuthnCredential[] memory webAuthnCredentials = validator.getWebAuthnCredentials(address(this));
+        bytes32[] memory actualCredentialIds = new bytes32[](webAuthnCredentials.length);
+        for (uint256 i = 0; i < webAuthnCredentials.length; i++) {
+            actualCredentialIds[i] = validator.generateCredentialId(address(this), webAuthnCredentials[i]);
+        }
+        // sort the actual credential ids before assertion in for-loop, and ensure that the actual credential ids are unique
+        actualCredentialIds.sort();
+        sortedLength = actualCredentialIds.length;
+        actualCredentialIds.uniquifySorted();
+        assertEq(actualCredentialIds.length, sortedLength, "webAuthn credentials on contract are not unique by credential id");
+        assertEq(webAuthnCredentials.length, expectedCredentials.length, "webAuthn credentials count mismatch");
+
+        // check that the actual credential ids are the same as the expected credential ids
+        for (uint256 i = 0; i < webAuthnCredentials.length; i++) {
+            assertEq(expectedCredentialIds[i], actualCredentialIds[i]);
+        }
+    }
+
+    function validateCredentialsCount(uint256 expectedCount) internal {
+        (uint256 ecdsaOwnersCount, uint256 webAuthnCredentialsCount) = validator.getCredentialsCount(address(this));
+        assertEq(ecdsaOwnersCount + webAuthnCredentialsCount, expectedCount);
+    }
+
+    function validateCredentialsCount(uint256 expectedECDSAOwnersCount, uint256 expectedWebAuthnCredentialsCount) internal {
+        (uint256 ecdsaOwnersCount, uint256 webAuthnCredentialsCount) = validator.getCredentialsCount(address(this));
+        assertEq(ecdsaOwnersCount, expectedECDSAOwnersCount);
+        assertEq(webAuthnCredentialsCount, expectedWebAuthnCredentialsCount);
+        assertEq(ecdsaOwnersCount + webAuthnCredentialsCount, expectedECDSAOwnersCount + expectedWebAuthnCredentialsCount);
+    }
+
+    function validateOwnersCredentialsAndThreshold(
+        address[] memory expectedOwners,
+        ContangoValidator.WebAuthnCredential[] memory expectedCredentials,
+        uint256 expectedThreshold
+    ) internal {
+        validateECDSAOwners(expectedOwners);
+        validateWebAuthnCredentials(expectedCredentials);
+        validateThreshold(expectedThreshold);
+        validateCredentialsCount(expectedOwners.length + expectedCredentials.length);
+    }
+
+
+    function installWithValidParameters(
+        uint256 threshold,
+        address[] memory owners,
+        ContangoValidator.WebAuthnCredential[] memory credentials
+    ) internal {
+        validator.onInstall(abi.encode(threshold, owners, credentials));
     }
 }

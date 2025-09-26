@@ -28,7 +28,6 @@ contract ContangoValidator is ERC7579HybridValidatorBase {
     using EnumerableSet for EnumerableSet.AddressSet;
     using EnumerableSet for EnumerableSet.Bytes32Set;
     using LibSort for address[];
-    using LibSort for bytes32[];
     using WebAuthn for bytes;
 
     /*//////////////////////////////////////////////////////////////
@@ -279,7 +278,6 @@ contract ContangoValidator is ERC7579HybridValidatorBase {
         CredentialUpdateConfig calldata config
     )
         external
-        virtual
     {
         _updateConfig(newThreshold, config);
     }
@@ -409,6 +407,7 @@ contract ContangoValidator is ERC7579HybridValidatorBase {
 
     /// @notice Validates a signature with external credential data
     /// @dev Used for stateless validation without pre-registered credentials
+    /// @dev IMPORTANT: The order of the ecdsaOwners and webAuthnSignatureData matters. The ecdsaOwners must be sorted and uniquified. The webAuthnSignatureData must be sorted and uniquified.
     /// @param hash Hash of the data to validate
     /// @param signature Signature data containing both ECDSA and WebAuthn signatures
     /// @param data Encoded credential details and threshold
@@ -444,9 +443,7 @@ contract ContangoValidator is ERC7579HybridValidatorBase {
                 hash, signatureData.ecdsaSignatureData, requiredThreshold
             );
 
-            // Sort and uniquify for efficient searching
-            ecdsaOwnerList.sort();
-            ecdsaOwnerList.uniquifySorted();
+            // ensure the same signature cannot be used multiple times
             ecdsaSigners.sort();
             ecdsaSigners.uniquifySorted();
 
