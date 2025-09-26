@@ -204,38 +204,6 @@ contract ContangoValidatorTest is BaseTest {
         validator.onInstall(data);
     }
 
-    function test_OnInstallRevertWhen_WebAuthnPubKeyXIsZero() public whenModuleIsNotInitialized {
-        ContangoValidator.WebAuthnCredential[] memory invalidCredentials =
-            new ContangoValidator.WebAuthnCredential[](1);
-        invalidCredentials[0] = ContangoValidator.WebAuthnCredential({
-            pubKeyX: 0,
-            pubKeyY: _webAuthnCredentials[0].pubKeyY,
-            requireUV: _webAuthnCredentials[0].requireUV
-        });
-
-        bytes memory data =
-            abi.encode(_threshold, ecdsaOwnersMap.keys(address(this)), invalidCredentials);
-
-        vm.expectRevert(ContangoValidator.InvalidPublicKey.selector);
-        validator.onInstall(data);
-    }
-
-    function test_OnInstallRevertWhen_WebAuthnPubKeyYIsZero() public whenModuleIsNotInitialized {
-        ContangoValidator.WebAuthnCredential[] memory invalidCredentials =
-            new ContangoValidator.WebAuthnCredential[](1);
-        invalidCredentials[0] = ContangoValidator.WebAuthnCredential({
-            pubKeyX: _webAuthnCredentials[0].pubKeyX,
-            pubKeyY: 0,
-            requireUV: _webAuthnCredentials[0].requireUV
-        });
-
-        bytes memory data =
-            abi.encode(_threshold, ecdsaOwnersMap.keys(address(this)), invalidCredentials);
-
-        vm.expectRevert(ContangoValidator.InvalidPublicKey.selector);
-        validator.onInstall(data);
-    }
-
     function test_OnInstallRevertWhen_WebAuthnCredentialsNotUnique()
         public
         whenModuleIsNotInitialized
@@ -457,16 +425,6 @@ contract ContangoValidatorTest is BaseTest {
             abi.encodeWithSelector(IERC7579Module.NotInitialized.selector, address(this))
         );
         validator.addWebAuthnCredential(_webAuthnCredentials[0]);
-    }
-
-    function test_AddWebAuthnCredentialRevertWhen_PubKeyIsZero() external whenModuleIsInitialized {
-        test_OnInstallWhenCredentialsAreValid();
-
-        ContangoValidator.WebAuthnCredential memory invalidCredential =
-            ContangoValidator.WebAuthnCredential({ pubKeyX: 0, pubKeyY: 88_888, requireUV: true });
-
-        vm.expectRevert(ContangoValidator.InvalidPublicKey.selector);
-        validator.addWebAuthnCredential(invalidCredential);
     }
 
     function test_AddWebAuthnCredentialRevertWhen_TotalCredentialsCountIsMoreThanMax()

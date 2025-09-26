@@ -223,8 +223,6 @@ contract ContangoValidator is ERC7579HybridValidatorBase {
             WebAuthnCredential memory credential = _credentials[i];
             bytes32 credentialId = generateCredentialId(account, credential);
 
-            if (credential.pubKeyX == 0 || credential.pubKeyY == 0) revert InvalidPublicKey();
-
             if (webAuthnCredentialIds.add(account, credentialId)) {
                 webAuthnCredentialDetails[credentialId][account] = credential;
                 emit WebAuthnCredentialAdded(account, credentialId, credential);
