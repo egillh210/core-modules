@@ -262,7 +262,6 @@ contract ContangoValidator is ERC7579HybridValidatorBase {
         _setThreshold(account, newThreshold);
         _removeECDSAOwners(account, config.ecdsaOwnersToRemove);
         _addECDSAOwners(account, config.ecdsaOwnersToAdd);
-        // todo: test that the order of this matters. If one wishes to change requireUV, one must remove the credential first.
         _removeWebAuthnCredentials(account, config.webAuthnCredentialsToRemove);
         _addWebAuthnCredentials(account, config.webAuthnCredentialsToAdd);
     }

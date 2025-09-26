@@ -416,6 +416,29 @@ contract ContangoValidatorTest is BaseTest {
         assertEq(ecdsaOwnersCount + webAuthnCredentialsCount, 3);
     }
 
+    function test_ReplaceWebAuthnCredential() external whenModuleIsInitialized {
+        test_OnInstallWhenCredentialsAreValid();
+
+        ContangoValidator.WebAuthnCredential memory newCredential = ContangoValidator.WebAuthnCredential({
+            pubKeyX: _webAuthnCredentials[0].pubKeyX,
+            pubKeyY: _webAuthnCredentials[0].pubKeyY,
+            requireUV: !_webAuthnCredentials[0].requireUV
+        });
+
+        bytes32[] memory credentialIdsToRemove = new bytes32[](1);
+        credentialIdsToRemove[0] = validator.generateCredentialId(address(this), _webAuthnCredentials[0]);
+
+        ContangoValidator.WebAuthnCredential[] memory credentialsToAdd = new ContangoValidator.WebAuthnCredential[](1);
+        credentialsToAdd[0] = newCredential;
+
+        validator.updateConfig(validator.thresholds(address(this)), ContangoValidator.CredentialUpdateConfig({
+            ecdsaOwnersToAdd: new address[](0),
+            ecdsaOwnersToRemove: new address[](0),
+            webAuthnCredentialsToAdd: credentialsToAdd,
+            webAuthnCredentialsToRemove: credentialIdsToRemove
+        }));
+    }
+
     /*//////////////////////////////////////////////////////////////
                           WEBAUTHN CREDENTIAL MANAGEMENT
     //////////////////////////////////////////////////////////////*/
