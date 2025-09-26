@@ -613,8 +613,10 @@ contract WebAuthnValidator is ERC7579HybridValidatorBase {
         // Verify each signature
         for (uint256 i; i < sigCount; ++i) {
             // Challenge is the hash to be signed
+            // comment: why is this inside the loop?
             bytes memory challenge = abi.encode(hash);
 
+            // why not simply ignore the context.credentialId array and use the computed ones
             // IMPORTANT:
             // **********************************************************************
             // * We assume here that signatures are ordered to match credential IDs *

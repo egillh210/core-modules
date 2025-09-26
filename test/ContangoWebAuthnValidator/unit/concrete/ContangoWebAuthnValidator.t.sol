@@ -2,17 +2,20 @@
 pragma solidity ^0.8.23;
 
 import { BaseTest } from "test/Base.t.sol";
-import { WebAuthnValidator } from "src/WebAuthnValidator/WebAuthnValidator.sol";
+import { ContangoWebAuthnTestValidator } from
+    "test/ContangoWebAuthnValidator/ContangoWebAuthnValidatorTest.sol";
 import { ERC7579HybridValidatorBase, ERC7579ValidatorBase } from "modulekit/Modules.sol";
 import { WebAuthn } from "webauthn-sol/src/WebAuthn.sol";
 import { IModule as IERC7579Module } from "modulekit/accounts/common/interfaces/IERC7579Module.sol";
 import { PackedUserOperation, getEmptyUserOperation } from "test/utils/ERC4337.sol";
 import { EIP1271_MAGIC_VALUE } from "test/utils/Constants.sol";
+import { ContangoWebAuthnValidator } from
+    "src/ContangoWebAuthnValidator/ContangoWebAuthnValidator.sol";
 import { Base64Url } from "FreshCryptoLib/utils/Base64Url.sol";
 import { LibSort } from "solady/utils/LibSort.sol";
 import { console } from "forge-std/console.sol";
 
-contract RhinestoneWebAuthnValidatorTest is BaseTest {
+contract ContangoWebAuthnValidatorTest is BaseTest {
     /*//////////////////////////////////////////////////////////////////////////
                                     LIBRARIES
     //////////////////////////////////////////////////////////////////////////*/
@@ -23,7 +26,7 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
                                     CONTRACTS
     //////////////////////////////////////////////////////////////////////////*/
 
-    WebAuthnValidator internal validator;
+    ContangoWebAuthnTestValidator internal validator;
 
     /*//////////////////////////////////////////////////////////////////////////
                                     VARIABLES
@@ -31,19 +34,16 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
 
     uint256 _threshold = 2;
 
-    // Test public keys for WebAuthn credentials
-    uint256[] _pubKeysX;
-    uint256[] _pubKeysY;
-    bool[] _requireUVs;
-
-    // Deterministically generated credential IDs (computed in setUp)
-    bytes32[] _credentialIds;
-
     // Mock WebAuthn signature data
     WebAuthn.WebAuthnAuth mockAuth;
 
     // Mock signature data for testing
     bytes mockSignatureData;
+
+    // Deterministically generated credential IDs (computed in setUp)
+    bytes32[] _credentialIds;
+    ContangoWebAuthnValidator.WebAuthnCredential[] _credentials;
+    mapping(bytes32 => ContangoWebAuthnValidator.WebAuthnCredential) public credentialIdToCredential;
 
     /*//////////////////////////////////////////////////////////////////////////
                                       SETUP
@@ -51,31 +51,31 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
 
     function setUp() public virtual override {
         BaseTest.setUp();
-        validator = new WebAuthnValidator();
+        validator = new ContangoWebAuthnTestValidator();
 
-        // Initialize credential arrays
-        _pubKeysX = new uint256[](2);
-        _pubKeysY = new uint256[](2);
-        _requireUVs = new bool[](2);
-        _credentialIds = new bytes32[](2);
+        // Initialize storage array by pushing elements instead of direct assignment
+        _credentials.push(
+            ContangoWebAuthnValidator.WebAuthnCredential({
+                pubKeyX: 66_296_829_923_831_658_891_499_717_579_803_548_012_279_830_557_731_564_719_736_971_029_660_387_468_805,
+                pubKeyY: 46_098_569_798_045_992_993_621_049_610_647_226_011_837_333_919_273_603_402_527_314_962_291_506_652_186,
+                requireUV: false
+            })
+        );
 
-        // Use real public keys from WebAuthn test
-        _pubKeysX[0] =
-            66_296_829_923_831_658_891_499_717_579_803_548_012_279_830_557_731_564_719_736_971_029_660_387_468_805;
-        _pubKeysY[0] =
-            46_098_569_798_045_992_993_621_049_610_647_226_011_837_333_919_273_603_402_527_314_962_291_506_652_186;
-        _requireUVs[0] = false;
-
-        _pubKeysX[1] =
-            77_427_310_596_034_628_445_756_159_459_159_056_108_500_819_865_614_675_054_701_790_516_611_205_123_311;
-        _pubKeysY[1] =
-            20_591_151_874_462_689_689_754_215_152_304_668_244_192_265_896_034_279_288_204_806_249_532_173_935_644;
-        _requireUVs[1] = true;
+        _credentials.push(
+            ContangoWebAuthnValidator.WebAuthnCredential({
+                pubKeyX: 77_427_310_596_034_628_445_756_159_459_159_056_108_500_819_865_614_675_054_701_790_516_611_205_123_311,
+                pubKeyY: 20_591_151_874_462_689_689_754_215_152_304_668_244_192_265_896_034_279_288_204_806_249_532_173_935_644,
+                requireUV: true
+            })
+        );
 
         // Pre-compute credential IDs for testing
-        for (uint256 i = 0; i < 2; i++) {
-            _credentialIds[i] =
-                validator.generateCredentialId(_pubKeysX[i], _pubKeysY[i], address(this));
+        uint256 credentialsCount = _credentials.length;
+        for (uint256 i = 0; i < credentialsCount; i++) {
+            bytes32 credentialId = validator.generateCredentialId(address(this), _credentials[i]);
+            _credentialIds.push(credentialId);
+            credentialIdToCredential[credentialId] = _credentials[i];
         }
 
         // Use a fixed challenge for testing
@@ -99,7 +99,7 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         // Create WebAuthn signature data
         WebAuthn.WebAuthnAuth[] memory sigs = new WebAuthn.WebAuthnAuth[](2);
 
-        sigs[1] = mockAuth;
+        sigs[0] = mockAuth;
 
         // Use a slightly different signature for the second credential
         WebAuthn.WebAuthnAuth memory mockAuth2 = WebAuthn.WebAuthnAuth({
@@ -115,18 +115,11 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
             s: 372_310_544_955_428_259_193_186_543_685_199_264_627_091_796_694_315_697_785_543_526_117_532_572_367
         });
 
-        sigs[0] = mockAuth2;
-
-        // Sort credential IDs
-        bytes32[] memory credentialIds = new bytes32[](2);
-        credentialIds[1] = _credentialIds[0];
-        credentialIds[0] = _credentialIds[1];
-        _credentialIds[0] = credentialIds[0];
-        _credentialIds[1] = credentialIds[1];
+        sigs[1] = mockAuth2;
 
         // Create the new signature format that includes the credential IDs:
         // abi.encode(credentialIds, abi.encode(signatures))
-        mockSignatureData = abi.encode(credentialIds, false, sigs);
+        mockSignatureData = abi.encode(_credentialIds, false, sigs);
     }
 
     /*//////////////////////////////////////////////////////////////////////////
@@ -138,97 +131,73 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
     //////////////////////////////////////////////////////////////*/
 
     function test_GenerateCredentialId() public view {
-        // Test that credential ID generation is deterministic
-        bytes32 credId = validator.generateCredentialId(_pubKeysX[1], _pubKeysY[1], address(this));
+        // Test that credential ID generation is deterministic based on the following properties:
+        // address, pubKeyX, pubKeyY (Note: requireUV is not included in the generation)
+        bytes32 credId1 = validator.generateCredentialId(address(this), _credentials[0]);
 
-        assertEq(credId, _credentialIds[0], "Credential ID generation should be deterministic");
-
-        // Test that different parameters produce different credential IDs
         bytes32 credId2 = validator.generateCredentialId(
-            _pubKeysX[0],
-            _pubKeysY[0],
-            address(1) // Different address
+            address(this),
+            ContangoWebAuthnValidator.WebAuthnCredential({
+                pubKeyX: _credentials[0].pubKeyX,
+                pubKeyY: _credentials[0].pubKeyY,
+                requireUV: !_credentials[0].requireUV // negate the requireUV
+             })
         );
 
-        assertTrue(credId != credId2, "Different addresses should produce different credential IDs");
+        assertEq(credId1, credId2, "RequireUV should not affect the credential ID generation");
+
+        // Test that different parameters produce different credential IDs
+        bytes32 credId3 = validator.generateCredentialId(
+            address(1), // Different address
+            _credentials[0]
+        );
+
+        assertTrue(
+            credId2 != credId3, "Different addresses should produce different credential IDs"
+        );
     }
 
     function test_OnInstallRevertWhen_ModuleIsInitialized() public {
         // Install the module first
 
-        // Setup WebAuthnCredentials
-        WebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
-            new WebAuthnValidator.WebAuthnCredential[](2);
-
-        webAuthnCredentials[1] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[0],
-            pubKeyY: _pubKeysY[0],
-            requireUV: _requireUVs[0]
-        });
-
-        webAuthnCredentials[0] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[1],
-            pubKeyY: _pubKeysY[1],
-            requireUV: _requireUVs[1]
-        });
-
-        bytes memory data = abi.encode(_threshold, webAuthnCredentials);
+        bytes memory data = abi.encode(_threshold, _credentials);
         validator.onInstall(data);
 
-        webAuthnCredentials = new WebAuthnValidator.WebAuthnCredential[](1);
-        webAuthnCredentials[0] =
-            WebAuthnValidator.WebAuthnCredential({ pubKeyX: 1000, pubKeyY: 2000, requireUV: false });
-        data = abi.encode(1, webAuthnCredentials);
+        ContangoWebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
+            new ContangoWebAuthnValidator.WebAuthnCredential[](1);
+        webAuthnCredentials[0] = ContangoWebAuthnValidator.WebAuthnCredential({
+            pubKeyX: 1000,
+            pubKeyY: 2000,
+            requireUV: false
+        });
+        bytes memory data2 = abi.encode(1, webAuthnCredentials);
 
-        // Try to install again and expect revert
-        // vm.expectRevert();
-        // validator.onInstall(data);
+        // Try to install again with different data than initially
+        vm.expectRevert();
+        validator.onInstall(data2);
+
+        // try installing again with same data as initially
+        vm.expectRevert();
+        validator.onInstall(data);
     }
 
     function test_OnInstallRevertWhen_ThresholdIs0() public whenModuleIsNotInitialized {
-        // Setup WebAuthnCredentials
-        WebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
-            new WebAuthnValidator.WebAuthnCredential[](2);
-
-        webAuthnCredentials[0] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[0],
-            pubKeyY: _pubKeysY[0],
-            requireUV: _requireUVs[0]
-        });
-
-        webAuthnCredentials[1] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[1],
-            pubKeyY: _pubKeysY[1],
-            requireUV: _requireUVs[1]
-        });
         // Create data with threshold = 0
-        bytes memory data = abi.encode(0, webAuthnCredentials);
+        bytes memory data = abi.encode(0, _credentials);
 
-        vm.expectRevert(WebAuthnValidator.ThresholdNotSet.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoWebAuthnValidator.InvalidThreshold.selector, 0, 1, _credentials.length
+            )
+        );
         validator.onInstall(data);
     }
 
     function test_OnInstallWhenThresholdIsValid() public whenModuleIsNotInitialized {
-        // Should set the threshold
-        // Setup WebAuthnCredentials
-        WebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
-            new WebAuthnValidator.WebAuthnCredential[](2);
-
-        webAuthnCredentials[1] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[0],
-            pubKeyY: _pubKeysY[0],
-            requireUV: _requireUVs[0]
-        });
-
-        webAuthnCredentials[0] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[1],
-            pubKeyY: _pubKeysY[1],
-            requireUV: _requireUVs[1]
-        });
-        bytes memory data = abi.encode(_threshold, webAuthnCredentials);
+        bytes memory data = abi.encode(_threshold, _credentials);
         validator.onInstall(data);
 
-        uint256 threshold = validator.threshold(address(this));
+        uint256 threshold = validator.thresholds(address(this));
         assertEq(threshold, _threshold, "Threshold should be set correctly");
     }
 
@@ -236,25 +205,14 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         public
         whenModuleIsNotInitialized
     {
-        // Setup WebAuthnCredentials
-        WebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
-            new WebAuthnValidator.WebAuthnCredential[](2);
-
-        webAuthnCredentials[0] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[0],
-            pubKeyY: _pubKeysY[0],
-            requireUV: _requireUVs[0]
-        });
-
-        webAuthnCredentials[1] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[1],
-            pubKeyY: _pubKeysY[1],
-            requireUV: _requireUVs[1]
-        });
         // Create data with threshold > credentials length
-        bytes memory data = abi.encode(3, webAuthnCredentials);
+        bytes memory data = abi.encode(3, _credentials);
 
-        vm.expectRevert(WebAuthnValidator.InvalidThreshold.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoWebAuthnValidator.InvalidThreshold.selector, 3, 1, _credentials.length
+            )
+        );
         validator.onInstall(data);
     }
 
@@ -263,11 +221,11 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         whenModuleIsNotInitialized
     {
         // Create array with 33 credentials (exceeding MAX_CREDENTIALS)
-        WebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
-            new WebAuthnValidator.WebAuthnCredential[](33);
+        ContangoWebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
+            new ContangoWebAuthnValidator.WebAuthnCredential[](33);
 
         for (uint256 i = 0; i < 33; i++) {
-            webAuthnCredentials[i] = WebAuthnValidator.WebAuthnCredential({
+            webAuthnCredentials[i] = ContangoWebAuthnValidator.WebAuthnCredential({
                 pubKeyX: i + 1000,
                 pubKeyY: i + 2000,
                 requireUV: (i % 2 == 0) // Alternate true/false
@@ -276,98 +234,113 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
 
         bytes memory data = abi.encode(_threshold, webAuthnCredentials);
 
-        vm.expectRevert(WebAuthnValidator.MaxCredentialsReached.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoWebAuthnValidator.InvalidCredentialsCount.selector, 33, 1, 32
+            )
+        );
         validator.onInstall(data);
     }
 
-    function test_OnInstallRevertWhen_PubKeyIsZero() public whenModuleIsNotInitialized {
+    // why validate calldata? Why is a public key of 0 not valid, yet we don't revert if its 1?
+    // they're both highly improbable/impossible to be valid public keys in practice, so why treat
+    // them differently?
+
+    function test_OnInstallRevertWhen_PubKeyXIsZero() public whenModuleIsNotInitialized {
         // Create credentials with zero X pubkey
-        WebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
-            new WebAuthnValidator.WebAuthnCredential[](2);
+        ContangoWebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
+            new ContangoWebAuthnValidator.WebAuthnCredential[](2);
 
-        webAuthnCredentials[0] = WebAuthnValidator.WebAuthnCredential({
+        webAuthnCredentials[0] = ContangoWebAuthnValidator.WebAuthnCredential({
             pubKeyX: 0, // Zero pubkey
-            pubKeyY: _pubKeysY[0],
-            requireUV: _requireUVs[0]
+            pubKeyY: _credentials[0].pubKeyY,
+            requireUV: _credentials[0].requireUV
         });
 
-        webAuthnCredentials[1] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[1],
-            pubKeyY: _pubKeysY[1],
-            requireUV: _requireUVs[1]
-        });
+        webAuthnCredentials[1] = _credentials[1];
 
         bytes memory data = abi.encode(_threshold, webAuthnCredentials);
 
-        vm.expectRevert(WebAuthnValidator.InvalidPublicKey.selector);
+        vm.expectRevert(ContangoWebAuthnValidator.InvalidPublicKey.selector);
+        validator.onInstall(data);
+    }
+
+    function test_OnInstallRevertWhen_PubKeyYIsZero() public whenModuleIsNotInitialized {
+        // Create credentials with zero X pubkey
+        ContangoWebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
+            new ContangoWebAuthnValidator.WebAuthnCredential[](2);
+
+        webAuthnCredentials[0] = ContangoWebAuthnValidator.WebAuthnCredential({
+            pubKeyX: _credentials[0].pubKeyX,
+            pubKeyY: 0, // Zero pubkey
+            requireUV: _credentials[0].requireUV
+        });
+
+        webAuthnCredentials[1] = _credentials[1];
+
+        bytes memory data = abi.encode(_threshold, webAuthnCredentials);
+
+        vm.expectRevert(ContangoWebAuthnValidator.InvalidPublicKey.selector);
         validator.onInstall(data);
     }
 
     function test_OnInstallRevertWhen_CredentialsNotUnique() public whenModuleIsNotInitialized {
         // Create credentials with duplicate values (same pubKeyX, pubKeyY, requireUV)
-        WebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
-            new WebAuthnValidator.WebAuthnCredential[](2);
+        ContangoWebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
+            new ContangoWebAuthnValidator.WebAuthnCredential[](2);
 
-        webAuthnCredentials[0] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[0],
-            pubKeyY: _pubKeysY[0],
-            requireUV: _requireUVs[0]
-        });
-
-        webAuthnCredentials[1] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[0],
-            pubKeyY: _pubKeysY[0],
-            requireUV: _requireUVs[0]
-        });
+        webAuthnCredentials[0] = _credentials[0];
+        webAuthnCredentials[1] = _credentials[0];
 
         bytes memory data = abi.encode(_threshold, webAuthnCredentials);
 
-        vm.expectRevert(WebAuthnValidator.NotUnique.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoWebAuthnValidator.AddCredentialError_CredentialAlreadyExists.selector,
+                address(this),
+                webAuthnCredentials[0]
+            )
+        );
         validator.onInstall(data);
     }
 
     function test_OnInstallWhenCredentialsAreValid() public whenModuleIsNotInitialized {
-        // Should add credentials and set up validator correctly
-        WebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
-            new WebAuthnValidator.WebAuthnCredential[](2);
-
-        webAuthnCredentials[1] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[0],
-            pubKeyY: _pubKeysY[0],
-            requireUV: _requireUVs[0]
-        });
-
-        webAuthnCredentials[0] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[1],
-            pubKeyY: _pubKeysY[1],
-            requireUV: _requireUVs[1]
-        });
-
-        bytes memory data = abi.encode(_threshold, webAuthnCredentials);
+        bytes memory data = abi.encode(_threshold, _credentials);
         validator.onInstall(data);
 
-        // Check credentials were added
+        ContangoWebAuthnValidator.WebAuthnCredential[] memory credentialsOnContract =
+            validator.getCredentials(address(this));
+        assertEq(credentialsOnContract.length, _credentials.length, "Credential count should match");
+
+        // test getCredentialIds and make sure it matches the credentials
         bytes32[] memory credIds = validator.getCredentialIds(address(this));
-        assertEq(credIds.length, webAuthnCredentials.length, "Credential count should match");
+        assertEq(credIds.length, _credentials.length, "Credential count should match");
 
-        // Verify the credential IDs match what we expect
-        bool foundCred0 = false;
-        bool foundCred1 = false;
+        // knowing that the lengths math, we now take the credentials that we got from the contract
+        // and compare them
+        // to the expected, which is the credentials we've defined in the test setup
+        for (uint256 i = 0; i < credentialsOnContract.length; i++) {
+            bytes32 credentialId =
+                validator.generateCredentialId(address(this), credentialsOnContract[i]);
+            ContangoWebAuthnValidator.WebAuthnCredential memory credentialInTestSetup =
+                credentialIdToCredential[credentialId];
 
-        for (uint256 i = 0; i < credIds.length; i++) {
-            if (credIds[i] == _credentialIds[0]) foundCred0 = true;
-            if (credIds[i] == _credentialIds[1]) foundCred1 = true;
+            assertEq(
+                credentialsOnContract[i].pubKeyX,
+                credentialInTestSetup.pubKeyX,
+                "Public key X should match"
+            );
+            assertEq(
+                credentialsOnContract[i].pubKeyY,
+                credentialInTestSetup.pubKeyY,
+                "Public key Y should match"
+            );
+            assertEq(
+                credentialsOnContract[i].requireUV,
+                credentialInTestSetup.requireUV,
+                "RequireUV should match"
+            );
         }
-
-        assertTrue(foundCred0, "First credential should be found");
-        assertTrue(foundCred1, "Second credential should be found");
-
-        // Check first credential exists with correct data
-        (uint256 pubKeyX, uint256 pubKeyY, bool requireUV) =
-            validator.getCredentialInfo(_credentialIds[1], address(this));
-        assertEq(pubKeyX, _pubKeysX[0], "Public key X should match");
-        assertEq(pubKeyY, _pubKeysY[0], "Public key Y should match");
-        assertEq(requireUV, _requireUVs[0], "RequireUV should match");
     }
 
     function test_OnUninstallShouldRemoveAllCredentials() public {
@@ -379,6 +352,9 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
 
         // Check credentials were removed
         bytes32[] memory credIds = validator.getCredentialIds(address(this));
+        ContangoWebAuthnValidator.WebAuthnCredential[] memory credentialsOnContract =
+            validator.getCredentials(address(this));
+        assertEq(credentialsOnContract.length, 0, "All credentials should be removed");
         assertEq(credIds.length, 0, "All credentials should be removed");
     }
 
@@ -390,7 +366,7 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         validator.onUninstall("");
 
         // Check threshold is 0
-        uint256 threshold = validator.threshold(address(this));
+        uint256 threshold = validator.thresholds(address(this));
         assertEq(threshold, 0, "Threshold should be reset to 0");
     }
 
@@ -422,7 +398,11 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         test_OnInstallWhenCredentialsAreValid();
 
         // Should revert
-        vm.expectRevert(WebAuthnValidator.InvalidThreshold.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoWebAuthnValidator.InvalidThreshold.selector, 0, 1, _credentials.length
+            )
+        );
         validator.setThreshold(0);
     }
 
@@ -434,7 +414,11 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         test_OnInstallWhenCredentialsAreValid();
 
         // Should revert
-        vm.expectRevert(WebAuthnValidator.InvalidThreshold.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoWebAuthnValidator.InvalidThreshold.selector, 10, 1, _credentials.length
+            )
+        );
         validator.setThreshold(10);
     }
 
@@ -443,7 +427,7 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         test_OnInstallWhenCredentialsAreValid();
 
         // Get current threshold
-        uint256 oldThreshold = validator.threshold(address(this));
+        uint256 oldThreshold = validator.thresholds(address(this));
         uint256 newThreshold = 1;
         assertNotEq(oldThreshold, newThreshold, "New threshold should be different");
 
@@ -451,7 +435,7 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         validator.setThreshold(newThreshold);
 
         // Check threshold
-        assertEq(validator.threshold(address(this)), newThreshold, "Threshold should be updated");
+        assertEq(validator.thresholds(address(this)), newThreshold, "Threshold should be updated");
     }
 
     function test_AddCredentialRevertWhen_ModuleIsNotInitialized() public {
@@ -459,7 +443,14 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         vm.expectRevert(
             abi.encodeWithSelector(IERC7579Module.NotInitialized.selector, address(this))
         );
-        validator.addCredential(99_999, 88_888, true);
+
+        validator.addCredential(
+            ContangoWebAuthnValidator.WebAuthnCredential({
+                pubKeyX: 99_999,
+                pubKeyY: 88_888,
+                requireUV: true
+            })
+        );
     }
 
     function test_AddCredentialRevertWhen_PubKeyIsZero() public whenModuleIsInitialized {
@@ -467,12 +458,24 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         test_OnInstallWhenCredentialsAreValid();
 
         // Should revert when X is 0
-        vm.expectRevert(WebAuthnValidator.InvalidPublicKey.selector);
-        validator.addCredential(0, 88_888, true);
+        vm.expectRevert(ContangoWebAuthnValidator.InvalidPublicKey.selector);
+        validator.addCredential(
+            ContangoWebAuthnValidator.WebAuthnCredential({
+                pubKeyX: 0,
+                pubKeyY: 88_888,
+                requireUV: true
+            })
+        );
 
         // Should revert when Y is 0
-        vm.expectRevert(WebAuthnValidator.InvalidPublicKey.selector);
-        validator.addCredential(99_999, 0, true);
+        vm.expectRevert(ContangoWebAuthnValidator.InvalidPublicKey.selector);
+        validator.addCredential(
+            ContangoWebAuthnValidator.WebAuthnCredential({
+                pubKeyX: 99_999,
+                pubKeyY: 0,
+                requireUV: true
+            })
+        );
     }
 
     function test_AddCredentialRevertWhen_CredentialCountIsMoreThanMax()
@@ -480,47 +483,33 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         whenModuleIsInitialized
     {
         // Create and install module with 32 credentials
-        WebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
-            new WebAuthnValidator.WebAuthnCredential[](32);
+        ContangoWebAuthnValidator.WebAuthnCredential[] memory webAuthnCredentials =
+            new ContangoWebAuthnValidator.WebAuthnCredential[](32);
 
         for (uint256 i = 0; i < 32; i++) {
-            webAuthnCredentials[i] = WebAuthnValidator.WebAuthnCredential({
+            webAuthnCredentials[i] = ContangoWebAuthnValidator.WebAuthnCredential({
                 pubKeyX: i + 1000,
                 pubKeyY: i + 2000,
                 requireUV: (i % 2 == 0) // Alternate true/false
              });
         }
 
-        // Generate credential IDs for these
-        bytes32[] memory credentialIds = new bytes32[](32);
-        for (uint256 i = 0; i < 32; i++) {
-            credentialIds[i] = validator.generateCredentialId(
-                webAuthnCredentials[i].pubKeyX, webAuthnCredentials[i].pubKeyY, address(this)
-            );
-        }
-        // Sort the credential ids and the webAuthnCredentials
-        for (uint256 i = 0; i < 32; i++) {
-            for (uint256 j = i + 1; j < 32; j++) {
-                if (credentialIds[i] > credentialIds[j]) {
-                    // Swap IDs
-                    bytes32 tempId = credentialIds[i];
-                    credentialIds[i] = credentialIds[j];
-                    credentialIds[j] = tempId;
-
-                    // Swap credentials
-                    WebAuthnValidator.WebAuthnCredential memory tempCred = webAuthnCredentials[i];
-                    webAuthnCredentials[i] = webAuthnCredentials[j];
-                    webAuthnCredentials[j] = tempCred;
-                }
-            }
-        }
-
         bytes memory data = abi.encode(1, webAuthnCredentials);
         validator.onInstall(data);
 
         // Try to add one more credential
-        vm.expectRevert(WebAuthnValidator.MaxCredentialsReached.selector);
-        validator.addCredential(99_999, 88_888, true);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoWebAuthnValidator.InvalidCredentialsCount.selector, 33, 1, 32
+            )
+        );
+        validator.addCredential(
+            ContangoWebAuthnValidator.WebAuthnCredential({
+                pubKeyX: 99_999,
+                pubKeyY: 88_888,
+                requireUV: true
+            })
+        );
     }
 
     function test_AddCredentialRevertWhen_CredentialAlreadyExists()
@@ -531,42 +520,49 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         test_OnInstallWhenCredentialsAreValid();
 
         // Try to add a credential that already exists
-        vm.expectRevert(WebAuthnValidator.CredentialAlreadyExists.selector);
-        validator.addCredential(_pubKeysX[0], _pubKeysY[0], _requireUVs[0]);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoWebAuthnValidator.AddCredentialError_CredentialAlreadyExists.selector,
+                address(this),
+                _credentials[0]
+            )
+        );
+        validator.addCredential(_credentials[0]);
     }
 
     function test_AddCredentialWhenCredentialIsValid() public whenModuleIsInitialized {
         // First install the module
         test_OnInstallWhenCredentialsAreValid();
 
-        // Add new credential
-        uint256 newPubKeyX = 99_999;
-        uint256 newPubKeyY = 88_888;
-        bool newRequireUV = true;
+        ContangoWebAuthnValidator.WebAuthnCredential memory newCredential =
+        ContangoWebAuthnValidator.WebAuthnCredential({
+            pubKeyX: 99_999,
+            pubKeyY: 88_888,
+            requireUV: true
+        });
 
-        validator.addCredential(newPubKeyX, newPubKeyY, newRequireUV);
+        validator.addCredential(newCredential);
 
         // Compute the credential ID
-        bytes32 newCredentialId =
-            validator.generateCredentialId(newPubKeyX, newPubKeyY, address(this));
+        bytes32 newCredentialId = validator.generateCredentialId(address(this), newCredential);
 
         // Check credential was added
         assertTrue(
-            validator.hasCredential(newPubKeyX, newPubKeyY, address(this)),
+            validator.hasCredential(address(this), newCredential),
             "Should have credential by parameters"
         );
 
         assertTrue(
-            validator.hasCredentialById(newCredentialId, address(this)),
+            validator.hasCredentialById(address(this), newCredentialId),
             "Should have credential by ID"
         );
 
         // Check credential info
-        (uint256 pubKeyX, uint256 pubKeyY, bool requireUV) =
-            validator.getCredentialInfo(newCredentialId, address(this));
-        assertEq(pubKeyX, newPubKeyX, "Public key X should match");
-        assertEq(pubKeyY, newPubKeyY, "Public key Y should match");
-        assertEq(requireUV, newRequireUV, "RequireUV should match");
+        ContangoWebAuthnValidator.WebAuthnCredential memory credential =
+            validator.getCredential(address(this), newCredentialId);
+        assertEq(credential.pubKeyX, newCredential.pubKeyX, "Public key X should match");
+        assertEq(credential.pubKeyY, newCredential.pubKeyY, "Public key Y should match");
+        assertEq(credential.requireUV, newCredential.requireUV, "RequireUV should match");
 
         // Check credential count
         assertEq(validator.getCredentialCount(address(this)), 3, "Credential count should be 3");
@@ -577,7 +573,13 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         vm.expectRevert(
             abi.encodeWithSelector(IERC7579Module.NotInitialized.selector, address(this))
         );
-        validator.removeCredential(99_999, 88_888);
+        validator.removeCredential(
+            ContangoWebAuthnValidator.WebAuthnCredential({
+                pubKeyX: 99_999,
+                pubKeyY: 88_888,
+                requireUV: true
+            })
+        );
     }
 
     function test_RemoveCredentialRevertWhen_CredentialDoesNotExist()
@@ -587,9 +589,22 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         // First install the module
         test_OnInstallWhenCredentialsAreValid();
 
+        ContangoWebAuthnValidator.WebAuthnCredential memory credentialToRemove =
+        ContangoWebAuthnValidator.WebAuthnCredential({
+            pubKeyX: 99_999,
+            pubKeyY: 88_888,
+            requireUV: true
+        });
+
         // Try to remove a credential that doesn't exist
-        vm.expectRevert(WebAuthnValidator.CannotRemoveCredential.selector);
-        validator.removeCredential(99_999, 88_888);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContangoWebAuthnValidator.RemoveCredentialError_CredentialDoesNotExist.selector,
+                address(this),
+                validator.generateCredentialId(address(this), credentialToRemove)
+            )
+        );
+        validator.removeCredential(credentialToRemove);
     }
 
     function test_RemoveCredentialRevertWhen_RemovalWouldBreakThreshold()
@@ -600,8 +615,10 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         test_OnInstallWhenCredentialsAreValid();
 
         // We have 2 credentials with threshold 2, so removing any would break threshold
-        vm.expectRevert(WebAuthnValidator.CannotRemoveCredential.selector);
-        validator.removeCredential(_pubKeysX[0], _pubKeysY[0]);
+        vm.expectRevert(
+            abi.encodeWithSelector(ContangoWebAuthnValidator.InvalidThreshold.selector, 2, 1, 1)
+        );
+        validator.removeCredential(_credentials[0]);
     }
 
     function test_RemoveCredentialWhenRemovalWouldNotBreakThreshold()
@@ -611,20 +628,20 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         // First install the module
         test_OnInstallWhenCredentialsAreValid();
 
-        // Lower threshold so we can remove a credential
-        validator.setThreshold(1);
-
-        // Remove a credential
-        validator.removeCredential(_pubKeysX[0], _pubKeysY[0]);
+        // removing one and lowering threshold should work however
+        bytes32[] memory credentialIdsToRemove = new bytes32[](1);
+        credentialIdsToRemove[0] = validator.generateCredentialId(address(this), _credentials[0]);
+        validator.updateConfig(
+            1, new ContangoWebAuthnValidator.WebAuthnCredential[](0), credentialIdsToRemove
+        );
 
         // Check credential was removed
         assertFalse(
-            validator.hasCredential(_pubKeysX[0], _pubKeysY[0], address(this)),
-            "Credential should be removed"
+            validator.hasCredential(address(this), _credentials[0]), "Credential should be removed"
         );
 
         assertFalse(
-            validator.hasCredentialById(_credentialIds[1], address(this)),
+            validator.hasCredentialById(address(this), credentialIdsToRemove[0]),
             "Credential should be removed by ID check"
         );
 
@@ -641,6 +658,7 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
 
         // Check length
         assertEq(credIds.length, _credentialIds.length, "Should have correct number of credentials");
+        assertEq(credIds.length, _credentials.length, "Should have correct number of credentials");
 
         // Check IDs match (may be in different order due to set storage)
         bool found0 = false;
@@ -661,19 +679,25 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
 
         // Check existing credential by parameters
         assertTrue(
-            validator.hasCredential(_pubKeysX[0], _pubKeysY[0], address(this)),
-            "Should have first credential"
+            validator.hasCredential(address(this), _credentials[0]), "Should have first credential"
         );
 
         // Check existing credential by ID
         assertTrue(
-            validator.hasCredentialById(_credentialIds[0], address(this)),
+            validator.hasCredentialById(address(this), _credentialIds[0]),
             "Should have first credential by ID"
         );
 
         // Check non-existent credential
         assertFalse(
-            validator.hasCredential(99_999, 88_888, address(this)),
+            validator.hasCredential(
+                address(this),
+                ContangoWebAuthnValidator.WebAuthnCredential({
+                    pubKeyX: 99_999,
+                    pubKeyY: 88_888,
+                    requireUV: true
+                })
+            ),
             "Should not have non-existent credential"
         );
     }
@@ -686,7 +710,13 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         assertEq(validator.getCredentialCount(address(this)), 2, "Should have 2 credentials");
 
         // Add a credential
-        validator.addCredential(99_999, 88_888, true);
+        validator.addCredential(
+            ContangoWebAuthnValidator.WebAuthnCredential({
+                pubKeyX: 99_999,
+                pubKeyY: 88_888,
+                requireUV: true
+            })
+        );
 
         // Check updated credential count
         assertEq(validator.getCredentialCount(address(this)), 3, "Should have 3 credentials");
@@ -696,14 +726,14 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         // First install the module
         test_OnInstallWhenCredentialsAreValid();
 
-        // Get credential info
-        (uint256 pubKeyX, uint256 pubKeyY, bool requireUV) =
-            validator.getCredentialInfo(_credentialIds[1], address(this));
+        // Get credential for credential ID [0]
+        ContangoWebAuthnValidator.WebAuthnCredential memory credential =
+            validator.getCredential(address(this), _credentialIds[1]);
 
         // Check info matches
-        assertEq(pubKeyX, _pubKeysX[0], "Public key X should match");
-        assertEq(pubKeyY, _pubKeysY[0], "Public key Y should match");
-        assertEq(requireUV, _requireUVs[0], "RequireUV should match");
+        assertEq(credential.pubKeyX, _credentials[1].pubKeyX, "Public key X should match");
+        assertEq(credential.pubKeyY, _credentials[1].pubKeyY, "Public key Y should match");
+        assertEq(credential.requireUV, _credentials[1].requireUV, "RequireUV should match");
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -728,7 +758,7 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
 
     function test_Name() public view {
         string memory name = validator.name();
-        assertEq(name, "WebAuthnValidator", "Name should be WebAuthnValidator");
+        assertEq(name, "ContangoWebAuthnValidator", "Name should be ContangoWebAuthnValidator");
     }
 
     function test_Version() public view {
@@ -894,12 +924,12 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         bytes memory signature = abi.encode(sigs);
 
         // Create verification context with mismatched arrays
-        WebAuthnValidator.WebAuthVerificationContext memory context = WebAuthnValidator
-            .WebAuthVerificationContext({
+        ContangoWebAuthnValidator.WebAuthVerificationContext memory context =
+        ContangoWebAuthnValidator.WebAuthVerificationContext({
             usePrecompile: false,
             threshold: 2,
-            credentialIds: _credentialIds, // 2 IDs
-            credentialData: new WebAuthnValidator.WebAuthnCredential[](1) // Different length!
+            credentialData: new ContangoWebAuthnValidator.WebAuthnCredential[](1) // Different
+                // length!
          });
 
         bytes memory data = abi.encode(context, address(this));
@@ -908,7 +938,7 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         assertFalse(result, "Should return false when array lengths don't match");
     }
 
-    function test_ValidateSignatureWithDataWhenThresholdIsInvalid() public view {
+    function test_ValidateSignatureWithDataWhenThresholdIsZero() public view {
         // Should return false when threshold is 0 or greater than credentials length
         bytes32 hash = bytes32(keccak256("test message"));
         WebAuthn.WebAuthnAuth[] memory sigs = new WebAuthn.WebAuthnAuth[](2);
@@ -916,51 +946,42 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         sigs[1] = mockAuth;
         bytes memory signature = abi.encode(sigs);
 
-        // Prepare credential arrays
-        bytes32[] memory credentialIds = new bytes32[](2);
-        credentialIds[0] = _credentialIds[0];
-        credentialIds[1] = _credentialIds[1];
-
-        WebAuthnValidator.WebAuthnCredential[] memory credentialData =
-            new WebAuthnValidator.WebAuthnCredential[](2);
-        credentialData[0] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[0],
-            pubKeyY: _pubKeysY[0],
-            requireUV: _requireUVs[0]
-        });
-        credentialData[1] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[1],
-            pubKeyY: _pubKeysY[1],
-            requireUV: _requireUVs[1]
-        });
-
-        // Case 1: Threshold is 0
-        WebAuthnValidator.WebAuthVerificationContext memory context1 = WebAuthnValidator
-            .WebAuthVerificationContext({
+        ContangoWebAuthnValidator.WebAuthVerificationContext memory context1 =
+        ContangoWebAuthnValidator.WebAuthVerificationContext({
             usePrecompile: false,
             threshold: 0, // Invalid threshold
-            credentialIds: credentialIds,
-            credentialData: credentialData
+            credentialData: _credentials
         });
 
         bytes memory data1 = abi.encode(context1);
         bool result1 = validator.validateSignatureWithData(hash, signature, data1);
-        assertFalse(result1, "Should return false when threshold is 0");
 
-        // Case 2: Threshold is greater than credentials length
-        WebAuthnValidator.WebAuthVerificationContext memory context2 = WebAuthnValidator
-            .WebAuthVerificationContext({
+        // I see no reason to not allow a threshold of 0 when calling this pure function
+        assertTrue(result1, "Should return true when threshold is 0");
+        // assertFalse(result1, "Should return false when threshold is 0");
+    }
+
+    function test_ValidateSignatureWithDataWhenThresholdIsGreaterThanCredentialsLength()
+        public
+        view
+    {
+        // Should return false when threshold is 0 or greater than credentials length
+        bytes32 hash = bytes32(keccak256("test message"));
+        WebAuthn.WebAuthnAuth[] memory sigs = new WebAuthn.WebAuthnAuth[](2);
+        sigs[0] = mockAuth;
+        sigs[1] = mockAuth;
+        bytes memory signature = abi.encode(sigs);
+
+        ContangoWebAuthnValidator.WebAuthVerificationContext memory context =
+        ContangoWebAuthnValidator.WebAuthVerificationContext({
             usePrecompile: false,
             threshold: 3, // Invalid threshold (> credentials length)
-            credentialIds: credentialIds,
-            credentialData: credentialData
+            credentialData: _credentials
         });
 
-        bytes memory data2 = abi.encode(context2);
-        bool result2 = validator.validateSignatureWithData(hash, signature, data2);
-        assertFalse(
-            result2, "Should return false when threshold is greater than credentials length"
-        );
+        bytes memory data = abi.encode(context);
+        bool result = validator.validateSignatureWithData(hash, signature, data);
+        assertFalse(result, "Should return false when threshold is greater than credentials length");
     }
 
     function test_ValidateSignatureWithDataWhenSignaturesAreNotInOrderWithCredentials()
@@ -969,24 +990,6 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
     {
         // Should return false when signatures don't match credential order
         bytes32 hash = bytes32(keccak256("test message"));
-
-        // Prepare credential arrays with correct data
-        bytes32[] memory credentialIds = new bytes32[](2);
-        credentialIds[0] = _credentialIds[0];
-        credentialIds[1] = _credentialIds[1];
-
-        WebAuthnValidator.WebAuthnCredential[] memory credentialData =
-            new WebAuthnValidator.WebAuthnCredential[](2);
-        credentialData[0] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[0],
-            pubKeyY: _pubKeysY[0],
-            requireUV: _requireUVs[0]
-        });
-        credentialData[1] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[1],
-            pubKeyY: _pubKeysY[1],
-            requireUV: _requireUVs[1]
-        });
 
         // Create signature data with credentials in wrong order
         WebAuthn.WebAuthnAuth[] memory sigs = new WebAuthn.WebAuthnAuth[](2);
@@ -999,12 +1002,11 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         bytes memory signature = abi.encode(sigs);
 
         // Context with valid threshold
-        WebAuthnValidator.WebAuthVerificationContext memory context = WebAuthnValidator
-            .WebAuthVerificationContext({
+        ContangoWebAuthnValidator.WebAuthVerificationContext memory context =
+        ContangoWebAuthnValidator.WebAuthVerificationContext({
             usePrecompile: false,
             threshold: 2,
-            credentialIds: credentialIds,
-            credentialData: credentialData
+            credentialData: _credentials
         });
 
         bytes memory data = abi.encode(context);
@@ -1017,24 +1019,6 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         // Should return false when not enough valid signatures are provided
         bytes32 hash = bytes32(keccak256("test message"));
 
-        // Prepare credential arrays with correct data
-        bytes32[] memory credentialIds = new bytes32[](2);
-        credentialIds[0] = _credentialIds[0];
-        credentialIds[1] = _credentialIds[1];
-
-        WebAuthnValidator.WebAuthnCredential[] memory credentialData =
-            new WebAuthnValidator.WebAuthnCredential[](2);
-        credentialData[0] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[0],
-            pubKeyY: _pubKeysY[0],
-            requireUV: _requireUVs[0]
-        });
-        credentialData[1] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[1],
-            pubKeyY: _pubKeysY[1],
-            requireUV: _requireUVs[1]
-        });
-
         // Create signature data
         WebAuthn.WebAuthnAuth[] memory sigs = new WebAuthn.WebAuthnAuth[](2);
 
@@ -1046,12 +1030,11 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         bytes memory signature = abi.encode(sigs);
 
         // Context with valid threshold
-        WebAuthnValidator.WebAuthVerificationContext memory context = WebAuthnValidator
-            .WebAuthVerificationContext({
+        ContangoWebAuthnValidator.WebAuthVerificationContext memory context =
+        ContangoWebAuthnValidator.WebAuthVerificationContext({
             usePrecompile: false,
             threshold: 2,
-            credentialIds: credentialIds,
-            credentialData: credentialData
+            credentialData: _credentials
         });
 
         bytes memory data = abi.encode(context);
@@ -1116,35 +1099,16 @@ contract RhinestoneWebAuthnValidatorTest is BaseTest {
         // Create a message hash that matches our WebAuthn challenge
         bytes32 hash = createTestUserOpHash();
 
-        // Prepare credential arrays with the correct public keys
-        bytes32[] memory credentialIds = new bytes32[](2);
-        credentialIds[0] = _credentialIds[0];
-        credentialIds[1] = _credentialIds[1];
-
-        WebAuthnValidator.WebAuthnCredential[] memory credentialData =
-            new WebAuthnValidator.WebAuthnCredential[](2);
-        credentialData[1] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[0],
-            pubKeyY: _pubKeysY[0],
-            requireUV: _requireUVs[0]
-        });
-        credentialData[0] = WebAuthnValidator.WebAuthnCredential({
-            pubKeyX: _pubKeysX[1],
-            pubKeyY: _pubKeysY[1],
-            requireUV: _requireUVs[1]
-        });
-
         // Use our pre-encoded valid signatures
         (,, WebAuthn.WebAuthnAuth[] memory signature) =
             abi.decode(mockSignatureData, (bytes32, bool, WebAuthn.WebAuthnAuth[]));
 
         // Context with valid threshold
-        WebAuthnValidator.WebAuthVerificationContext memory context = WebAuthnValidator
-            .WebAuthVerificationContext({
+        ContangoWebAuthnValidator.WebAuthVerificationContext memory context =
+        ContangoWebAuthnValidator.WebAuthVerificationContext({
             usePrecompile: false,
             threshold: 2,
-            credentialIds: credentialIds,
-            credentialData: credentialData
+            credentialData: _credentials
         });
 
         bytes memory data = abi.encode(context, address(this));
